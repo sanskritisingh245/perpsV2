@@ -256,3 +256,7 @@ app.post("/api/order", authMiddleware , async(req:Request, res:Response)=>{
         data: order,
     });
 })
+
+app.listen(3000, ()=>{
+    console.log("listening on port 3000")
+})
