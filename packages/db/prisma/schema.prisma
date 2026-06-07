@@ -19,6 +19,7 @@ model User {
   password      String
   orders        Order[]
   balance       Balance[]
+  position      Position[]
   maker_fills   Fill[] @relation("maker_user")
   taker_fills   Fill[] @relation("taker_user")
 }
@@ -92,4 +93,21 @@ model Balance {
   locked       Decimal
   user         User @relation(fields: [userId] , references: [id])
   @@unique([userId, asset])
+}
+
+
+enum Sides {
+  LONG
+  SHORT
+}
+model Position {
+  id           String @id @default(uuid())
+  userId       String
+  marketId     String
+  side         Sides
+  qty          String
+  entryPrice   String
+  margin       String
+  user         User @relation(fields: [userId], references: [id])
+  @@unique([userId, marketId])
 }
