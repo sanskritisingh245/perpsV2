@@ -1,6 +1,6 @@
 import { createClient } from "redis";
 import { match } from "./helper/helper";
-import { restOrder } from "./src/book";
+import { restOrder , getOrCreateBook , restoreBook  } from "./src/book";
 
 const client= createClient();
 await client.connect();
@@ -11,7 +11,12 @@ try {
 } catch {
     // group already exists — fine
 }
-
+const snapKeys = await client.keys("orderbook:snapshot:*");
+for(const key of snapKeys){
+    const data = await client.get(key);
+    if(data) restoreBook(JSON.parse(data));
+}
+console.log(`restored ${snapKeys.length} order book from snapshot`);
 while(true){
     const response = await client.xReadGroup("engine-group", "engine-1", 
         [
@@ -61,6 +66,12 @@ while(true){
             filledQty: 0,
         });
     }
+
+    const book = getOrCreateBook(order.marketId);
+    await client.xAdd("book-updates", "*", {
+        marketId:order.marketId,
+        book:JSON.stringify(book),
+    });
 
     await client.xAck("orders", "engine-group", message.id)
     

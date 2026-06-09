@@ -50,3 +50,7 @@ export function restOrder(
     levels[key].openOrders.push(order);
     levels[key].availableQty += order.qty - order.filledQty;
 }
+
+export function restoreBook(book:Book){
+    books.set(book.marketId, book);
+}
