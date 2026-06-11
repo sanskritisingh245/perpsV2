@@ -7,6 +7,7 @@ export type OpenOrder = {
     orderId: string;
     qty: number;
     filledQty: number;
+    leverage:number;
 };
 
 export type Level = {

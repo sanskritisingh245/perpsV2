@@ -7,6 +7,7 @@ import { authMiddleware } from "./authMiddleware";
 import { balanceSchema } from "./zod/balance";
 import { OrderSchema } from "./zod/order";
 import { createClient } from "redis";
+import { da } from "zod/locales";
 
 
 const JWT_SECRET=process.env.JWT_SECRET||"";
@@ -183,7 +184,7 @@ app.post("/api/order", authMiddleware , async(req:Request, res:Response)=>{
       });  
     }
 
-    const requiredMargin= new Prisma.Decimal(data.price).mul(data.qty);
+    const requiredMargin= new Prisma.Decimal(data.price).mul(data.qty).div(data.leverage);
 
     const balance= await prisma.balance.findUnique({
         where:{
@@ -249,6 +250,7 @@ app.post("/api/order", authMiddleware , async(req:Request, res:Response)=>{
         side:data.side,
         price: data.price,
         qty: data.qty,
+        leverage:String(data.leverage),
     });
 
     return res.status(200).json({

@@ -41,8 +41,9 @@ while(true){
     const qty = Number(order.qty);
     const price = Number(order.price);
     const side= order.side as "BUY" | "SELL";
+    const leverage= Number(order.leverage);
 
-    const {fills , remainingQty} = match(order.userId, order.orderId, order.marketId, side, qty, price);
+    const {fills , remainingQty} = match(order.userId, order.orderId, order.marketId, side, qty, price , leverage);
 
     for (const f of fills){
         await client.xAdd("fills", "*", {
@@ -52,8 +53,10 @@ while(true){
             takerUserId:f.takerUserId,
             takerOrderId:f.takerOrderId,
             takerSide:side,
+            takerLeverage:String(f.takerLeverage),
             makerUserId:f.makerUserId,
-            makerOrderId:f.makerOrderId
+            makerOrderId:f.makerOrderId,
+            makerLeverage:String(f.makerLeverage),
         });
     }
 
@@ -64,6 +67,7 @@ while(true){
             orderId: order.orderId,
             qty: remainingQty,
             filledQty: 0,
+            leverage,
         });
     }
 

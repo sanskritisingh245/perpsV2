@@ -13,8 +13,10 @@ type FillMessage = {
     takerUserId:string;
     takerOrderId:string;
     takerSide:string;
+    takerLeverage:string;
     makerUserId:string;
     makerOrderId:string;
+    makerLeverage:string;
 };
 
 
@@ -30,6 +32,35 @@ try{
     )
 }catch(err){
     console.log(err)
+}
+// replay it's own un-acked fills from a pervious crash
+const recovery = await client.xReadGroup(
+    "settle-group", "worker-1",
+    [{
+        key:"fills", 
+        id:"0"
+    }],
+    {
+        COUNT:1000
+    },
+)
+
+if(recovery) {
+    for(const stream of recovery){
+        for(const message of stream.messages){
+            try{
+                await settleFill(message.id , message.message as FillMessage);
+                await client.xAck("fills", "settle-group", message.id);
+            }catch(err : any){
+                if(err ?. code === "P2002"){
+                    //acking the already settled 
+                    await client.xAck("fills", "settle-group",message.id);
+                }else{
+                    console.error("recovery failed, leaving pending:",message.id)
+                }
+            }
+        }
+    }
 }
 
 while(true){
@@ -97,8 +128,8 @@ async function settleFill(streamId : string , f:FillMessage) {
             })  
         }
 
-        await applyPositionUpdate(tx, f.takerUserId, f.marketId, f.takerSide, Number(f.qty), Number(f.price));
-        await applyPositionUpdate(tx, f.makerUserId, f.marketId, f.takerSide === "BUY" ? "SELL" : "BUY", Number(f.qty), Number(f.price));
+        await applyPositionUpdate(tx, f.takerUserId, f.marketId, f.takerSide, Number(f.qty), Number(f.price),Number(f.takerLeverage));
+        await applyPositionUpdate(tx, f.makerUserId, f.marketId, f.takerSide === "BUY" ? "SELL" : "BUY", Number(f.qty), Number(f.price), Number(f.makerLeverage));
     }, {
         maxWait:15000,
         timeout:30000,
@@ -112,7 +143,8 @@ async function  applyPositionUpdate(
     marketId:string,
     side:string,
     qty:number,
-    price:number 
+    price:number,
+    leverage:number
 ) {
     const positionType = side  === "BUY" ? "LONG" :"SHORT";
 
@@ -133,7 +165,7 @@ async function  applyPositionUpdate(
                 side:positionType,
                 qty:String(qty),
                 entryPrice:String(price),
-                margin:String(price * qty),
+                margin:String((price * qty)/leverage),
             }
         });
         return;
@@ -144,7 +176,7 @@ async function  applyPositionUpdate(
         const oldQty = Number(position.qty);
         const newQty= oldQty+qty;
         const newEntry = (oldQty *Number(position.entryPrice) + qty * price) /newQty;
-        const newMargin = Number(position.margin) + price*qty;
+        const newMargin = Number(position.margin) + price*qty/leverage;
 
         await tx.position.update({
             where:{userId_marketId :{
@@ -154,8 +186,9 @@ async function  applyPositionUpdate(
             data:{
                 qty:String(newQty),
                 entryPrice:String(newEntry),
-                margin:String(newMargin),
-            },
+                margin: String(newMargin),
+
+            }
         });
         return;
     }
@@ -264,7 +297,7 @@ async function  applyPositionUpdate(
                 side:positionType,
                 qty:String(newQty),
                 entryPrice:String(price),
-                margin:String(price * newQty),
+                margin:String((price * newQty)/leverage),
             },
         });
         return;

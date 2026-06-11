@@ -3,8 +3,10 @@ import { getOrCreateBook, type Level } from "../src/book";
 type Fill = {
     makerUserId: string;
     makerOrderId: string;
+    makerLeverage:number;
     takerUserId:string;
     takerOrderId:string;
+    takerLeverage:number;
     qty: number;
     price: number;
 };
@@ -16,11 +18,12 @@ export function match(
     side:"BUY" | "SELL",
     quantity:number,
     price:number,
+    leverage:number,
 ){
     const book = getOrCreateBook(symbol);
     // A BUY matches against resting sells (asks); a SELL against resting buys (bids).
     const levels = side === "BUY" ? book.asks : book.bids;
-    return matchSide(levels , side , userId , orderId , symbol , quantity , price)
+    return matchSide(levels , side , userId , orderId , symbol , quantity , price , leverage)
 }
 
 export  function matchSide(
@@ -31,6 +34,7 @@ export  function matchSide(
     symbol: string,
     quantity: number,
     price: number,
+    takerLeverage:number
 
 ) : { fills: Fill[] ; remainingQty: number} {
     const isLong = side === "BUY";
@@ -63,11 +67,18 @@ export  function matchSide(
             fills.push({
                 makerUserId:order.userId,
                 makerOrderId:order.orderId,
+                makerLeverage:order.leverage,
                 takerUserId,
                 takerOrderId,
+                takerLeverage,
                 qty:take,
                 price:levelPrice
             });
+        }
+        //removing full filled orders from this level
+        level.openOrders = level.openOrders.filter(o => o.filledQty < o.qty);
+        if(level.openOrders.length === 0){
+            delete levels[levelPrice.toString()];
         }
     }
 
