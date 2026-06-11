@@ -184,8 +184,26 @@ app.post("/api/order", authMiddleware , async(req:Request, res:Response)=>{
       });  
     }
 
-    const requiredMargin= new Prisma.Decimal(data.price).mul(data.qty).div(data.leverage);
+    //const requiredMargin= new Prisma.Decimal(data.price).mul(data.qty).div(data.leverage);
+    const position = await prisma.position.findUnique({
+        where:{
+            userId_marketId:{
+                userId,
+                marketId:data.market
+            }
+        },
+    });
 
+    const orderDir = data.side === "BUY" ? "LONG" :"SHORT";
+    const orderQty = new Prisma.Decimal(data.qty);
+
+    let openingQty= orderQty;
+    if(position && position.side !== orderDir){
+        const posQty = new Prisma.Decimal(position.qty);
+        openingQty =orderQty.greaterThan(posQty) ? orderQty.minus(posQty) : new Prisma.Decimal(0);
+    }
+
+    const requiredMargin  = new Prisma.Decimal(data.price).mul(openingQty).div(data.leverage);
     const balance= await prisma.balance.findUnique({
         where:{
             userId_asset:{
