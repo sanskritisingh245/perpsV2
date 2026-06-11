@@ -7,7 +7,7 @@ import { authMiddleware } from "./authMiddleware";
 import { balanceSchema } from "./zod/balance";
 import { OrderSchema } from "./zod/order";
 import { createClient } from "redis";
-import { da } from "zod/locales";
+
 
 
 const JWT_SECRET=process.env.JWT_SECRET||"";
@@ -124,7 +124,9 @@ app.post ("/api/on-ramp",authMiddleware, async(req:Request, res:Response)=>{
             }
         },
         update:{
-            available:data.amount,
+            available:{
+                increment:data.amount
+            },
         },
         create:{
             userId,

@@ -17,7 +17,7 @@ export const authMiddleware=(req:Request, res:Response, next:NextFunction)=>{
         const token= req.headers.authorization;
         //console.log("asd", token)
         if(!token){
-            return res.status(404).json({
+            return res.status(401).json({
                 success:false,
                 error:"token not found ehhh"
             })

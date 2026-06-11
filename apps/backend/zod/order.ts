@@ -7,6 +7,6 @@ export const OrderSchema=z.object({
     price:z.string(),
     qty:z.string(),
     OrderType:z.enum(["LIMIT" , "MARKET"]),
-    leverage:z.number(),
+    leverage:z.number().int(),
 })
 
