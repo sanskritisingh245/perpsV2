@@ -55,3 +55,21 @@ export function restOrder(
 export function restoreBook(book:Book){
     books.set(book.marketId, book);
 }
+
+export function removeOrder(
+    marketId: string, side: "BUY"|"SELL", price: number, orderId: string,
+): OpenOrder | undefined {
+    const book = getOrCreateBook(marketId);
+    const levels = side === "BUY" ? book.bids : book.asks;
+    const level = levels[String(price)];
+    if (!level) return undefined;
+
+    const idx = level.openOrders.findIndex(o => o.orderId === orderId);
+    if (idx === -1) return undefined;
+
+    const removed = level.openOrders[idx]!;   
+    level.openOrders.splice(idx, 1);          
+    level.availableQty = Math.max(0, level.availableQty - (removed.qty - removed.filledQty));
+    if (level.openOrders.length === 0) delete levels[String(price)];
+    return removed;
+}

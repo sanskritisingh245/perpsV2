@@ -33,7 +33,7 @@ export const authMiddleware=(req:Request, res:Response, next:NextFunction)=>{
         req.id=decoded.id;
         next();
     }catch(e:any){
-        return res.status(403).json({
+        return res.status(401).json({
         success: false,
         msg: "INCORRECT_TOKEN",
       });

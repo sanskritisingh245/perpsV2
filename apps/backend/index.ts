@@ -1,12 +1,14 @@
 import express, { type Request, type Response } from "express";
 import bcrypt from "bcrypt";
 import { SignupSchema } from "./zod/auth";
-import { OrderType, prisma, Prisma } from "@repo/db";
+import { COLLATERAL, OrderType, prisma, Prisma } from "@repo/db";
 import  jwt  from "jsonwebtoken";
 import { authMiddleware } from "./authMiddleware";
 import { balanceSchema } from "./zod/balance";
 import { OrderSchema } from "./zod/order";
 import { createClient } from "redis";
+import { success } from "zod";
+import { tr } from "zod/locales";
 
 
 
@@ -105,6 +107,14 @@ app.post("/api/signin", async (req:Request, res:Response)=>{
 
 })
 
+app.post("/api/admin/market", async (req:Request, res:Response) => {
+    if (req.headers.authorization !== ADMIN_SECRET){
+        return res.status(403).json({ success: false, error: "FORBIDDEN" });
+    }
+    const market = await prisma.market.create({ data: { slug: req.body.slug, imageUrl: req.body.imageUrl } });
+    return res.json({ success: true, data: market });
+});
+
 
 app.post ("/api/on-ramp",authMiddleware, async(req:Request, res:Response)=>{
     const userId=req.id 
@@ -120,7 +130,7 @@ app.post ("/api/on-ramp",authMiddleware, async(req:Request, res:Response)=>{
         where:{
             userId_asset:{
                 userId:userId,
-                asset:data.asset
+                asset:COLLATERAL
             }
         },
         update:{
@@ -130,7 +140,7 @@ app.post ("/api/on-ramp",authMiddleware, async(req:Request, res:Response)=>{
         },
         create:{
             userId,
-            asset:data.asset,
+            asset:COLLATERAL,
             available:data.amount,
             locked:"0"
         },      
@@ -145,19 +155,11 @@ app.post ("/api/on-ramp",authMiddleware, async(req:Request, res:Response)=>{
 app.get("/api/balance", authMiddleware, async(req:Request, res:Response)=>{
     const userId=req.id;
 
-    const asset= req.query.asset as string;
-    if (!asset) { 
-        return res.status(400).json({ 
-            success: false, 
-            error: "ASSET_REQUIRED", 
-        }); 
-    }
-
     const balance= await prisma.balance.findUnique({
         where:{
             userId_asset:{
                 userId:userId,
-                asset:asset
+                asset:COLLATERAL
             }
         }
     })
@@ -165,7 +167,7 @@ app.get("/api/balance", authMiddleware, async(req:Request, res:Response)=>{
     if(!balance){
         return res.status(404).json({
             success:false,
-            error:"BALANACE_NOT_FOUND"
+            error:"BALANCE_NOT_FOUND"
         })
     }
 
@@ -185,8 +187,12 @@ app.post("/api/order", authMiddleware , async(req:Request, res:Response)=>{
         error: "INVALID_DATA",
       });  
     }
+    //rejecting unknown markets
+    const market = await prisma.market.findUnique({ where: { id: data.market } });
+    if (!market) {
+        return res.status(400).json({ success: false, error: "INVALID_MARKET" });
+    }
 
-    //const requiredMargin= new Prisma.Decimal(data.price).mul(data.qty).div(data.leverage);
     const position = await prisma.position.findUnique({
         where:{
             userId_marketId:{
@@ -210,7 +216,7 @@ app.post("/api/order", authMiddleware , async(req:Request, res:Response)=>{
         where:{
             userId_asset:{
                 userId:userId,
-                asset:data.market
+                asset:COLLATERAL
             }
         }
     })
@@ -235,7 +241,7 @@ app.post("/api/order", authMiddleware , async(req:Request, res:Response)=>{
         where:{
             userId_asset:{
                 userId:userId,
-                asset:data.market
+                asset:COLLATERAL
             }
         },
         data:{
@@ -279,6 +285,80 @@ app.post("/api/order", authMiddleware , async(req:Request, res:Response)=>{
     });
 })
 
+app.get("/api/position", authMiddleware , async(req:Request , res:Response)=>{
+    const userId= req.id;
+    if(!userId){
+        return res.status(404).json({
+            success:false,
+            error:"USERID_NOT_FOUND"
+        })
+    }
+    const position = await prisma.position.findMany({
+        where:{
+            userId:userId
+        }
+    });
+    return res.status(200).json({
+        success:true,
+        data:position
+    })
+})
+
+app.get("/api/orders", authMiddleware , async(req:Request , res:Response)=>{
+    const userId= req.id;
+    if(!userId){
+        return res.status(404).json({
+            success:false,
+            error:"USERID_NOT_FOUND"
+        })
+    }
+    const orders = await prisma.order.findMany({
+        where:{
+            userId:userId
+        },
+        orderBy:{
+            createdAt :"desc"
+        }
+    })
+    return res.status(200).json({
+        success:true,
+        data:orders
+    })
+})
+
+app.delete("/api/order/:id", authMiddleware , async(req:Request, res:Response)=>{
+    const order = await prisma.order.findUnique({
+        where:{
+            id: req.params.id as string
+        }
+    });
+    if(!order || order.userId !== req.id){
+        return res.status(404).json({
+            success:false,
+            error:"ORDER_NOT_FOUND"
+        });
+    }
+
+    if(order.status !== "OPEN" && order.status !== "PARTIALLY_FILLED"){
+        return res.status(400).json({
+            success:false,
+            error:"NOT_CANCELLABLE"
+        });
+    }
+    
+    await client.xAdd("orders", "*", {
+        type:"order.cancel",
+        orderId:order.id,
+        userId:req.id,
+        marketId:order.marketId,
+        side:order.side,
+        price:order.price ?? "0",
+    })
+    return res.status(200).json({
+        success:true,
+        msg:"CANCEL_REQUESTED"
+    });
+})
 app.listen(3000, ()=>{
     console.log("listening on port 3000")
 })

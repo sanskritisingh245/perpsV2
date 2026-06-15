@@ -1,4 +1,4 @@
-import { OrderStatus, prisma } from "@repo/db";
+import { COLLATERAL, OrderStatus, prisma, Prisma } from "@repo/db";
 import { createClient } from "redis";
 
 
@@ -33,6 +33,15 @@ try{
 }catch(err){
     console.log(err)
 }
+try{
+    await client.xGroupCreate("cancels", "settle-group", "0", 
+        {
+            MKSTREAM:true
+        }
+    )
+}catch(err){
+    console.log(err);
+}
 // replay it's own un-acked fills from a pervious crash
 const recovery = await client.xReadGroup(
     "settle-group", "worker-1",
@@ -63,32 +72,68 @@ if(recovery) {
     }
 }
 
-while(true){
-    const response = await client.xReadGroup("settle-group", "worker-1",
-        [{
-            key:"fills",
-            id:">"
-        }],
-        {
-            BLOCK:0,
-            COUNT:10
+async function consumeFills() { 
+    while(true){
+        const response = await client.xReadGroup("settle-group", "worker-1",
+            [{
+                key:"fills",
+                id:">"
+            }],
+            {
+                BLOCK:0,
+                COUNT:10
+            }
+        );
+        if(!response) continue;
+    
+        for(const stream of response){
+            for(const message of stream.messages){
+                try{
+                    await settleFill(message.id, message.message as FillMessage)
+                    await client.xAck("fills", "settle-group", message.id)
+                    
+                }catch(err){
+                    console.error("settle failed, leaving pending",message.id , err)
+                }
+            }
         }
-    );
-    if(!response) continue;
-
-    for(const stream of response){
-        for(const message of stream.messages){
+    
+        const {messages : claimed} = await client.xAutoClaim("fills","settle-group", "worker-1", 60000, "0");
+        for (const m of claimed){
+            if(!m) continue;
             try{
-                await settleFill(message.id, message.message as FillMessage)
-                await client.xAck("fills", "settle-group",
-                    message.id
-                )
+                await settleFill(m.id, m.message as FillMessage);
+                await client.xAck("fills", "settle-group", m.id);
             }catch(err){
-                console.error("settle failed, leaving pending",message.id , err)
+                console.error("reclaim retry failed", m.id, err);
+            }
+
+        }                        
+    }
+}
+
+async function consumeCancels() {
+    while (true) {
+        const response = await client.xReadGroup("settle-group", "worker-1",
+            [{ key: "cancels", id: ">" }], { BLOCK: 0, COUNT: 10 });
+        if (!response) continue;
+
+        for (const stream of response) {
+            for (const message of stream.messages) {
+                try {
+                    await settleCancel(message.message as { orderId: string; userId: string; unfilledQty: string });
+                    await client.xAck("cancels", "settle-group", message.id);
+                } catch (err) {
+                    console.error("cancel settle failed", message.id, err);
+                }
             }
         }
     }
 }
+
+// start both consumers concurrently (no await — each is an infinite loop)
+consumeFills();
+consumeCancels();
 
 async function settleFill(streamId : string , f:FillMessage) {
     await prisma.$transaction(async (tx) => {
@@ -113,8 +158,8 @@ async function settleFill(streamId : string , f:FillMessage) {
             })
             if(!order) continue;
     
-            const newFilled = Number(order.filledQty) + Number(f.qty);
-            const status = newFilled >= Number(order.qty)
+            const newFilled = new Prisma.Decimal(order.filledQty).add(f.qty);
+            const status = newFilled.greaterThanOrEqualTo(order.qty)
             ?OrderStatus.FILLED
             :OrderStatus.PARTIALLY_FILLED
     
@@ -127,9 +172,19 @@ async function settleFill(streamId : string , f:FillMessage) {
                 }
             })  
         }
+        const takerOrder = await tx.order.findUnique({ where: { id: f.takerOrderId } });
+        const makerOrder = await tx.order.findUnique({ where: { id: f.makerOrderId } });
 
-        await applyPositionUpdate(tx, f.takerUserId, f.marketId, f.takerSide, Number(f.qty), Number(f.price),Number(f.takerLeverage));
-        await applyPositionUpdate(tx, f.makerUserId, f.marketId, f.takerSide === "BUY" ? "SELL" : "BUY", Number(f.qty), Number(f.price), Number(f.makerLeverage));
+        await applyPositionUpdate(
+            tx, f.takerUserId, f.marketId, f.takerSide,
+            new Prisma.Decimal(f.qty), new Prisma.Decimal(f.price), new Prisma.Decimal(f.takerLeverage),
+            new Prisma.Decimal(takerOrder!.initialMargin), new Prisma.Decimal(takerOrder!.qty),
+        );
+        await applyPositionUpdate(
+            tx, f.makerUserId, f.marketId, f.takerSide === "BUY" ? "SELL" : "BUY",
+            new Prisma.Decimal(f.qty), new Prisma.Decimal(f.price), new Prisma.Decimal(f.makerLeverage),
+            new Prisma.Decimal(makerOrder!.initialMargin), new Prisma.Decimal(makerOrder!.qty),
+        );
     }, {
         maxWait:15000,
         timeout:30000,
@@ -142,9 +197,11 @@ async function  applyPositionUpdate(
     userId:string,
     marketId:string,
     side:string,
-    qty:number,
-    price:number,
-    leverage:number
+    qty:Prisma.Decimal,
+    price:Prisma.Decimal,
+    leverage:Prisma.Decimal,
+    reservation:Prisma.Decimal,
+    orderQty:Prisma.Decimal,
 ) {
     const positionType = side  === "BUY" ? "LONG" :"SHORT";
 
@@ -158,25 +215,39 @@ async function  applyPositionUpdate(
     })
 
     if(!position){
+        const M = price.mul(qty).div(leverage);
+        const reservationFill = reservation.mul(qty).div(orderQty);
         await tx.position.create({
             data:{
                 userId,
                 marketId,
                 side:positionType,
-                qty:String(qty),
-                entryPrice:String(price),
-                margin:String((price * qty)/leverage),
+                qty:qty.toString(),
+                entryPrice:price.toString(),
+                margin:M.toString(),
             }
         });
+        await tx.balance.update({
+            where:{userId_asset:{
+                userId,
+                asset:COLLATERAL
+            }},
+            data:{
+                locked: {increment: M.sub(reservationFill)},
+                available: {increment : reservationFill.sub(M)}
+            }
+        })
         return;
     }
 
     //same-side -> increase it (weighted-average entry)
     if(position.side === positionType){
-        const oldQty = Number(position.qty);
-        const newQty= oldQty+qty;
-        const newEntry = (oldQty *Number(position.entryPrice) + qty * price) /newQty;
-        const newMargin = Number(position.margin) + price*qty/leverage;
+        const oldQty = new Prisma.Decimal(position.qty);
+        const newQty = oldQty.add(qty);
+        const newEntry = oldQty.mul(position.entryPrice).add(qty.mul(price)).div(newQty);
+        const M = price.mul(qty).div(leverage); // the real margin this position needs, calculated at the actual fill price
+        const newMargin = new Prisma.Decimal(position.margin).add(M);
+        const reservationForFill = reservation.mul(qty).div(orderQty); // amount backend already locked for this fill
 
         await tx.position.update({
             where:{userId_marketId :{
@@ -184,30 +255,42 @@ async function  applyPositionUpdate(
                 marketId
             }},
             data:{
-                qty:String(newQty),
-                entryPrice:String(newEntry),
-                margin: String(newMargin),
+                qty:newQty.toString(),
+                entryPrice:newEntry.toString(),
+                margin: newMargin.toString(),
 
             }
         });
+
+        await tx.balance.update({
+            where:{
+                userId_asset:{
+                    userId,
+                    asset:COLLATERAL
+                }
+            },data:{
+                locked: { increment : M.sub(reservationForFill)},
+                available: { increment : reservationForFill.sub(M)}
+            }
+        })
         return;
     }
     //opposite side -> closing/reducing
 
-    const posQty = Number(position.qty);
-    const entry = Number(position.entryPrice);
-    const margin = Number(position.margin);
+    const posQty = new Prisma.Decimal(position.qty);
+    const entry = new Prisma.Decimal(position.entryPrice);
+    const margin = new Prisma.Decimal(position.margin);
 
     const realizedPnl = position.side === "LONG"
-        ?(price - entry) *qty
-        :(entry - price) *qty
+        ? price.sub(entry).mul(qty)
+        : entry.sub(price).mul(qty)
 
-    if(qty === posQty){
+    if(qty.equals(posQty)){
         await tx.balance.update({
             where:{
                 userId_asset:{
-                    userId, 
-                    asset:marketId
+                    userId,
+                    asset:COLLATERAL
                 }
             },
             data:{
@@ -215,14 +298,14 @@ async function  applyPositionUpdate(
                     decrement :margin
                 },
                 available:{
-                    increment: margin+realizedPnl
+                    increment: margin.add(realizedPnl)
                 },
             },
         });
         await tx.position.delete({
             where:{
                 userId_marketId:{
-                    userId, 
+                    userId,
                     marketId
                 }
             }
@@ -230,14 +313,14 @@ async function  applyPositionUpdate(
         return;
     }
 
-    if(qty < posQty){
-        const marginReleased = margin *(qty / posQty);
+    if(qty.lessThan(posQty)){
+        const marginReleased = margin.mul(qty).div(posQty);
 
         await tx.balance.update({
             where:{
                 userId_asset:{
                     userId,
-                    asset:marketId
+                    asset:COLLATERAL
                 }
             },
             data:{
@@ -245,7 +328,7 @@ async function  applyPositionUpdate(
                     decrement :marginReleased
                 },
                 available:{
-                    increment:marginReleased + realizedPnl
+                    increment:marginReleased.add(realizedPnl)
                 },
             },
         });
@@ -258,34 +341,37 @@ async function  applyPositionUpdate(
                 }
             },
             data:{
-                qty: String(posQty -qty),
-                margin:String(margin - marginReleased)
+                qty: posQty.sub(qty).toString(),
+                margin:margin.sub(marginReleased).toString()
             },
         });
         return;
     }
-    if(qty > posQty){
+    if(qty.greaterThan(posQty)){
         const closePnl = position.side === "LONG"
-            ?(price - entry) * posQty
-            :(entry - price) * posQty
-        
+            ? price.sub(entry).mul(posQty)
+            : entry.sub(price).mul(posQty)
+
         await tx.balance.update({
             where:{
                 userId_asset:{
                     userId,
-                    asset:marketId
+                    asset:COLLATERAL
                 }
             },data:{
                 locked:{
                     decrement :margin
                 },
                 available:{
-                    increment:margin+closePnl
+                    increment:margin.add(closePnl)
                 },
             },
         });
-        
-        const newQty = qty - posQty;
+
+        const newQty = qty.sub(posQty);
+        const M = price.mul(newQty).div(leverage);
+        const reservationForFill = reservation;
+
         await tx.position.update({
             where:{
                 userId_marketId:{
@@ -295,11 +381,54 @@ async function  applyPositionUpdate(
             },
             data:{
                 side:positionType,
-                qty:String(newQty),
-                entryPrice:String(price),
-                margin:String((price * newQty)/leverage),
+                qty:newQty.toString(),
+                entryPrice:price.toString(),
+                margin:M.toString(),
             },
         });
+        await tx.balance.update({
+            where:{
+                userId_asset:{
+                    userId,
+                    asset:COLLATERAL
+                }
+            },data:{
+                locked : { increment : M.sub(reservationForFill)},
+                available: { increment : reservationForFill.sub(M)},
+            }
+        })
         return;
     }
+}
+
+async function settleCancel(c: {orderId: string; userId: string; unfilledQty: string }) {
+    await prisma.$transaction(async (tx)=>{
+        const order = await tx.order.findUnique({
+            where:{
+                id:c.orderId
+            }
+        });
+        if(!order) return;
+
+        const released = new Prisma.Decimal(order.initialMargin).mul(c.unfilledQty).div(order.qty);
+        await tx.balance.update({
+            where:{
+                userId_asset:{
+                    userId:c.userId, 
+                    asset:COLLATERAL
+                }
+            },data:{
+                locked: { decrement : released},
+                available:{ increment : released},
+            }
+        })
+        await tx.order.update({
+            where:{
+                id:c.orderId,
+            },data:{
+                status: "CANCELLED"
+            }    
+        });
+    })
+    
 }
