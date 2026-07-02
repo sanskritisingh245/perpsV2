@@ -4,6 +4,13 @@ import { COLLATERAL, prisma, Prisma } from  "@repo/db";
 const client = createClient();
 await client.connect();
 
+// The consumer loop below issues a blocking xReadGroup(BLOCK:0) on `client`,
+// which head-of-line-blocks every other command on that connection until a
+// fill arrives. The liquidation interval reads mark prices, so give it its own
+// connection — otherwise liquidations stall whenever the market is quiet.
+const markClient = client.duplicate();
+await markClient.connect();
+
 try{
     await client.xGroupCreate("fills", "markprice-group", "0",
         {
@@ -16,7 +23,7 @@ try{
 setInterval(async ()=> {
     const positions = await prisma.position.findMany();
     for(const pos of positions){
-        const mark = Number(await client.get(`markprice:${pos.marketId}`));
+        const mark = Number(await markClient.get(`markprice:${pos.marketId}`));
         if(!mark) continue;
 
         const entry = Number(pos.entryPrice);
@@ -68,5 +75,12 @@ while(true){
         },
     );
     if(!response) continue;
+    for(const stream of response){
+        for(const message of stream.messages){
+            const {marketId , price} = message.message;
+            await client.set(`markprice:${marketId}`, price); //price  is last trade price
+            await client.xAck("fills", "markprice-group", message.id)
+        }
+    }
 
 }

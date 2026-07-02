@@ -1,4 +1,4 @@
-import express, { type Request, type Response } from "express";
+import express, { response, type Request, type Response } from "express";
 import bcrypt from "bcrypt";
 import { SignupSchema } from "./zod/auth";
 import { COLLATERAL, OrderType, prisma, Prisma } from "@repo/db";
@@ -7,8 +7,6 @@ import { authMiddleware } from "./authMiddleware";
 import { balanceSchema } from "./zod/balance";
 import { OrderSchema } from "./zod/order";
 import { createClient } from "redis";
-import { success } from "zod";
-import { tr } from "zod/locales";
 
 
 
@@ -23,6 +21,21 @@ client.connect();
 
 const app = express();
 app.use(express.json());
+
+// In-memory set of valid market ids, used to reject orders on unknown markets
+// without a DB round-trip per order. Warmed before the server starts, refreshed
+// every 10s, and updated eagerly on market creation so new markets aren't stale.
+let marketIds = new Set<string>();
+async function refreshMarkets() {
+    try {
+        const data = await prisma.market.findMany({ select: { id: true } });
+        marketIds = new Set(data.map((m) => m.id));
+    } catch (err) {
+        console.error("market cache refresh failed", err);
+    }
+}
+await refreshMarkets();
+setInterval(refreshMarkets, 10_000);
 
 app.post("/api/signup", async (req: Request, res: Response) =>{
     const {success, data}= SignupSchema.safeParse(req.body);
@@ -98,7 +111,7 @@ app.post("/api/signin", async (req:Request, res:Response)=>{
         id:user.id,
         username:user.username
     },JWT_SECRET)
-    console.log("token", token )
+    //console.log("token", token )
     return res.status(200).json({
         success:true,
         data:token,
@@ -112,7 +125,10 @@ app.post("/api/admin/market", async (req:Request, res:Response) => {
         return res.status(403).json({ success: false, error: "FORBIDDEN" });
     }
     const market = await prisma.market.create({ data: { slug: req.body.slug, imageUrl: req.body.imageUrl } });
+    marketIds.add(market.id); // keep the order-validation cache fresh for brand-new markets
     return res.json({ success: true, data: market });
+    
+ 
 });
 
 
@@ -187,102 +203,90 @@ app.post("/api/order", authMiddleware , async(req:Request, res:Response)=>{
         error: "INVALID_DATA",
       });  
     }
-    //rejecting unknown markets
-    const market = await prisma.market.findUnique({ where: { id: data.market } });
-    if (!market) {
+    // Reject unknown markets using the in-memory cache (no per-order DB hit).
+    if (!marketIds.has(data.market)) {
         return res.status(400).json({ success: false, error: "INVALID_MARKET" });
     }
+    
 
-    const position = await prisma.position.findUnique({
-        where:{
-            userId_marketId:{
-                userId,
-                marketId:data.market
-            }
-        },
-    });
+    
 
-    const orderDir = data.side === "BUY" ? "LONG" :"SHORT";
     const orderQty = new Prisma.Decimal(data.qty);
+    const orderDir = data.side === "BUY" ? "LONG" : "SHORT";
 
-    let openingQty= orderQty;
-    if(position && position.side !== orderDir){
-        const posQty = new Prisma.Decimal(position.qty);
-        openingQty =orderQty.greaterThan(posQty) ? orderQty.minus(posQty) : new Prisma.Decimal(0);
-    }
-
-    const requiredMargin  = new Prisma.Decimal(data.price).mul(openingQty).div(data.leverage);
-    const balance= await prisma.balance.findUnique({
-        where:{
-            userId_asset:{
-                userId:userId,
-                asset:COLLATERAL
+    let order;
+    try{
+        order = await prisma.$transaction(async(tx)=>{
+            // Only the exposure-increasing portion of an order needs fresh margin.
+            // An order opposite to an open position closes/reduces it first (that
+            // margin is released at settlement), so we lock margin only for any
+            // quantity beyond the current position size. A pure close locks 0.
+            const position = await tx.position.findUnique({
+                where:{ userId_marketId:{ userId, marketId:data.market } },
+            });
+            let openingQty = orderQty;
+            if(position && position.side !== orderDir){
+                const posQty = new Prisma.Decimal(position.qty);
+                openingQty = orderQty.greaterThan(posQty) ? orderQty.minus(posQty) : new Prisma.Decimal(0);
             }
-        }
-    })
+            const requiredMargin = new Prisma.Decimal(data.price).mul(openingQty).div(data.leverage);
 
-    if(!balance){
-        return res.status(404).json({
-            success:false,
-            error:"BALANACE_NOT_FOUND"
-        })
+            const locked = await tx.balance.updateMany({
+                where:{
+                    userId,
+                    asset:COLLATERAL,
+                    available:{
+                        gte: requiredMargin
+                    }
+                },data:{
+                    available: {
+                        decrement : requiredMargin
+                    },
+                    locked: {
+                        increment : requiredMargin
+                    }
+                },
+            });
+            if(locked.count === 0) throw new Error("NOT_ENOUGH_BALANCE");
+
+            return tx.order.create({
+                data:{
+                    userId,
+                    marketId:data.market,
+                    orderType:data.OrderType,
+                    side:data.side,
+                    price:data.price,
+                    qty:data.qty,
+                    initialMargin: requiredMargin.toString(),
+                    filledQty: "0",
+                    status: "OPEN"
+                },
+            });
+        });
+    } catch (err: any) {
+        if (err.message === "NOT_ENOUGH_BALANCE") {
+            return res.status(400).json({ success: false, error: "NOT_ENOUGH_BALANCE" });
+        }
+        return res.status(500).json({ success: false, error: "ORDER_FAILED" });
     }
-
-    const availableBalance= balance.available;
-
-    if (availableBalance.lessThan(requiredMargin)) {
-      return res.status(400).json({
-        success: false,
-        error: "NOT_ENOUGH_BALANCE",
-      });
-    }
-
-    await prisma.balance.update({
-        where:{
-            userId_asset:{
-                userId:userId,
-                asset:COLLATERAL
-            }
-        },
-        data:{
-            available:{
-                decrement: requiredMargin
-            },
-            locked:{
-                increment: requiredMargin
-            }
-        }
-    })
-
-    const order = await prisma.order.create({
-        data:{
-            userId,
-            marketId:data.market,
-            orderType:data.OrderType,
-            side:data.side,
-            price:data.price,
-            qty:data.qty,
-            initialMargin:requiredMargin.toString(),
-            filledQty:"0",
-            status:"OPEN",
-        }
-    })
 
     await client.XADD("orders", "*", {
         type: "order.created",
         orderId: order.id,
         userId: userId,
         marketId: order.marketId,
-        side:data.side,
+        side: data.side,
         price: data.price,
         qty: data.qty,
-        leverage:String(data.leverage),
+        leverage: String(data.leverage),
+        orderType: data.OrderType,
     });
 
     return res.status(200).json({
         success: true,
         data: order,
     });
+
 })
 
 app.get("/api/position", authMiddleware , async(req:Request , res:Response)=>{
@@ -359,6 +363,71 @@ app.delete("/api/order/:id", authMiddleware , async(req:Request, res:Response)=>
         msg:"CANCEL_REQUESTED"
     });
 })
+// Public order book. The snapshot-worker keeps each market's book in Redis at
+// orderbook:snapshot:<marketId>; we read it, aggregate per price level and
+// return sorted bids (desc) and asks (asc).
+
+app.get("/api/orderbook/:marketId", async (req: Request, res: Response) => {
+    const raw = await client.get(`orderbook:snapshot:${req.params.marketId}`);
+    if (!raw) {
+        return res.status(200).json({
+            success: true,
+            data: { marketId: req.params.marketId, bids: [], asks: [], lastTradePrice: 0 },
+        });
+    }
+
+    const book = JSON.parse(raw) as {
+        marketId: string;
+        bids: Record<string, { availableQty: number }>;
+        asks: Record<string, { availableQty: number }>;
+        lastTradePrice: number;
+    };
+
+    const levels = (side: Record<string, { availableQty: number }>) =>
+        Object.entries(side)
+            .map(([price, lvl]) => ({ price: Number(price), qty: lvl.availableQty }))
+            .filter((l) => l.qty > 0);
+
+    const bids = levels(book.bids).sort((a, b) => b.price - a.price);
+    const asks = levels(book.asks).sort((a, b) => a.price - b.price);
+
+    return res.status(200).json({
+        success: true,
+        data: { marketId: book.marketId, bids, asks, lastTradePrice: book.lastTradePrice },
+    });
+});
+
+// Candlestick data proxied from Binance's public market-data API (no key
+// needed). The browser can't call Binance directly here, and this keeps the
+// chart backed by real OHLC instead of the session-only fills tape.
+const KLINE_INTERVALS = new Set([
+    "1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d","3d","1w","1M",
+]);
+app.get("/api/klines/:symbol", async (req: Request, res: Response) => {
+    const symbol = String(req.params.symbol).toUpperCase();
+    const interval = KLINE_INTERVALS.has(String(req.query.interval)) ? String(req.query.interval) : "15m";
+    const limit = Math.min(1000, Math.max(10, Number(req.query.limit) || 200));
+    const url = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`;
+    try {
+        const r = await fetch(url);
+        if (!r.ok) {
+            return res.status(502).json({ success: false, error: "BINANCE_REJECTED" });
+        }
+        const raw = (await r.json()) as any[];
+        const candles = raw.map((k) => ({
+            t: k[0],          // open time (ms)
+            o: Number(k[1]),
+            h: Number(k[2]),
+            l: Number(k[3]),
+            c: Number(k[4]),
+            v: Number(k[5]),
+        }));
+        return res.json({ success: true, data: candles });
+    } catch {
+        return res.status(502).json({ success: false, error: "BINANCE_UNREACHABLE" });
+    }
+});
+
 app.listen(3000, ()=>{
     console.log("listening on port 3000")
 })
