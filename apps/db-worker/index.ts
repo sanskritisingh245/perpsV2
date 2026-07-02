@@ -20,8 +20,15 @@ type FillMessage = {
 };
 
 
-const client=createClient();//publish message
+const client=createClient({ url: process.env.REDIS_URL });// fills consumer + setup/recovery (falls back to localhost when REDIS_URL is unset)
 await client.connect();
+
+// consumeFills and consumeCancels both issue blocking xReadGroup(BLOCK:0) reads.
+// node-redis serializes commands on one connection, so a blocking read on one
+// stream head-of-line-blocks the other loop (and stalls settlement after the
+// first message). Give the cancels loop its own connection.
+const cancelClient = client.duplicate();
+await cancelClient.connect();
 
 try{
     await client.xGroupCreate("fills", "settle-group", "0",
@@ -57,17 +64,8 @@ const recovery = await client.xReadGroup(
 if(recovery) {
     for(const stream of recovery){
         for(const message of stream.messages){
-            try{
-                await settleFill(message.id , message.message as FillMessage);
-                await client.xAck("fills", "settle-group", message.id);
-            }catch(err : any){
-                if(err ?. code === "P2002"){
-                    //acking the already settled 
-                    await client.xAck("fills", "settle-group",message.id);
-                }else{
-                    console.error("recovery failed, leaving pending:",message.id)
-                }
-            }
+            await settleAndAck(message.id, message.message as FillMessage);
+
         }
     }
 }
@@ -88,33 +86,22 @@ async function consumeFills() {
     
         for(const stream of response){
             for(const message of stream.messages){
-                try{
-                    await settleFill(message.id, message.message as FillMessage)
-                    await client.xAck("fills", "settle-group", message.id)
-                    
-                }catch(err){
-                    console.error("settle failed, leaving pending",message.id , err)
-                }
+                await settleAndAck(message.id, message.message as FillMessage);
+
             }
         }
     
         const {messages : claimed} = await client.xAutoClaim("fills","settle-group", "worker-1", 60000, "0");
         for (const m of claimed){
             if(!m) continue;
-            try{
-                await settleFill(m.id, m.message as FillMessage);
-                await client.xAck("fills", "settle-group", m.id);
-            }catch(err){
-                console.error("reclaim retry failed", m.id, err);
-            }
-
+            await settleAndAck(m.id, m.message as FillMessage);
         }                        
     }
 }
 
 async function consumeCancels() {
     while (true) {
-        const response = await client.xReadGroup("settle-group", "worker-1",
+        const response = await cancelClient.xReadGroup("settle-group", "worker-1",
             [{ key: "cancels", id: ">" }], { BLOCK: 0, COUNT: 10 });
         if (!response) continue;
 
@@ -122,7 +109,7 @@ async function consumeCancels() {
             for (const message of stream.messages) {
                 try {
                     await settleCancel(message.message as { orderId: string; userId: string; unfilledQty: string });
-                    await client.xAck("cancels", "settle-group", message.id);
+                    await cancelClient.xAck("cancels", "settle-group", message.id);
                 } catch (err) {
                     console.error("cancel settle failed", message.id, err);
                 }
@@ -135,6 +122,20 @@ async function consumeCancels() {
 consumeFills();
 consumeCancels();
 
+
+async function settleAndAck(id:string, msg:FillMessage) {
+    try{
+        await settleFill(id,msg);
+        await client.xAck("fills", "settle-group", id);
+    }catch(err:any){
+        if(err?.code === "P2002"){
+            await client.xAck("fills", "settle-group", id);
+        }else{
+            console.log("settle failed , leaving pending:" , id , err);
+        }
+    }
+    
+}
 async function settleFill(streamId : string , f:FillMessage) {
     await prisma.$transaction(async (tx) => {
         await tx.fill.create({

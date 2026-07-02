@@ -10,11 +10,14 @@ import { createClient } from "redis";
 
 
 
-const JWT_SECRET=process.env.JWT_SECRET||"";
-const ADMIN_SECRET=process.env.ADMIN_SECRET || "";
+const JWT_SECRET=process.env.JWT_SECRET;
+const ADMIN_SECRET=process.env.ADMIN_SECRET;
+if(!JWT_SECRET || !ADMIN_SECRET){
+    throw new Error("JWT_SECRET and ADMIN_SECRET must be set");
+}
 
 
-const client=createClient();//publish message
+const client=createClient({ url: process.env.REDIS_URL });//publish message (falls back to localhost when REDIS_URL is unset)
 client.connect();
 
 
@@ -428,6 +431,7 @@ app.get("/api/klines/:symbol", async (req: Request, res: Response) => {
     }
 });
 
-app.listen(3000, ()=>{
-    console.log("listening on port 3000")
+const PORT = Number(process.env.PORT) || 3000;
+app.listen(PORT, ()=>{
+    console.log(`listening on port ${PORT}`)
 })

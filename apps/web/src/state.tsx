@@ -131,8 +131,24 @@ function FillsProvider({ children }: { children: ReactNode }) {
     let retry: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
 
-    const connect = () => {
-      const url = `ws://${location.hostname}:8080`;
+    // The ws-server runs on its own host in prod, so we can't assume same-origin.
+    // The web server hands back its public URL via /config; fall back to
+    // same-host :8080 for local dev.
+    let cachedUrl: string | null = null;
+    const resolveUrl = async (): Promise<string> => {
+      if (cachedUrl) return cachedUrl;
+      try {
+        const res = await fetch("/config");
+        const cfg = await res.json();
+        if (cfg?.wsUrl) return (cachedUrl = cfg.wsUrl as string);
+      } catch { /* fall through to same-host default */ }
+      const scheme = location.protocol === "https:" ? "wss" : "ws";
+      return (cachedUrl = `${scheme}://${location.hostname}:8080`);
+    };
+
+    const connect = async () => {
+      const url = await resolveUrl();
+      if (closed) return;
       ws = new WebSocket(url);
       ws.onopen = () => setConnected(true);
       ws.onclose = () => {

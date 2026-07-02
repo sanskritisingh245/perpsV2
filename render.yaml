@@ -1,0 +1,93 @@
+# Render Blueprint — cheap tier (~$7/mo).
+#
+# One paid worker runs all four background loops (see worker.ts); the three web
+# services run on Render's FREE tier; Redis is a free external Upstash database.
+#
+# Deploy:
+#   1. Create a free Upstash Redis DB → copy its rediss:// URL.
+#   2. Push this repo to GitHub.
+#   3. Render → New + → Blueprint → pick this repo. Fill the sync:false secrets:
+#        - DATABASE_URL  (Neon connection string)
+#        - REDIS_URL     (the Upstash rediss:// URL)
+#        - JWT_SECRET, ADMIN_SECRET  (strong random values — not the dev ones)
+#   4. Run the DB migration once (free tier has no pre-deploy step):
+#        cd packages/db && DATABASE_URL=<neon> bun --bun run prisma migrate deploy
+#   5. After the first deploy, set perp-web's BACKEND_URL / PUBLIC_WS_URL to the
+#      actual perp-backend / perp-ws-server public URLs Render assigns.
+#
+# Free-tier caveats: web services spin down when idle (~30–60s cold start on the
+# next request) and share a monthly free-hours budget. The always-on worker
+# ($7/mo starter) is the only paid piece.
+
+# DATABASE_URL + REDIS_URL are shared secrets — enter each once here.
+envVarGroups:
+  - name: perp-secrets
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+
+services:
+  # ------------------- all four background loops in one worker (PAID) -------
+  # matching-engine + db-worker + mark-price + snapshot, via worker.ts.
+  # Must stay at exactly one instance (in-memory order book + liquidator).
+  - type: worker
+    name: perp-engine
+    runtime: docker
+    region: virginia
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: bun run worker.ts
+    plan: starter
+    numInstances: 1
+    envVars:
+      - fromGroup: perp-secrets
+
+  # ------------------------------------------------- HTTP API (FREE) --------
+  - type: web
+    name: perp-backend
+    runtime: docker
+    region: virginia
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: bun run apps/backend/index.ts
+    plan: free
+    envVars:
+      - fromGroup: perp-secrets
+      - key: JWT_SECRET
+        sync: false
+      - key: ADMIN_SECRET
+        sync: false
+
+  # ---------------------------------------- WebSocket fan-out (FREE) --------
+  - type: web
+    name: perp-ws-server
+    runtime: docker
+    region: virginia
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: bun run apps/ws-server/index.ts
+    plan: free
+    envVars:
+      - fromGroup: perp-secrets
+
+  # ------------------- frontend: serves React + proxies /api (FREE) ---------
+  - type: web
+    name: perp-web
+    runtime: docker
+    region: virginia
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: bun run apps/web/index.ts
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Proxy to the backend's PUBLIC url so a request wakes it from idle
+      # (internal calls don't wake a spun-down free service). Verify/adjust
+      # these to the URLs Render assigns after the first deploy.
+      - key: BACKEND_URL
+        value: https://perp-backend.onrender.com
+      - key: PUBLIC_WS_URL
+        value: wss://perp-ws-server.onrender.com

@@ -1,6 +1,6 @@
 import { createClient } from "redis";
 
-const client = createClient();
+const client = createClient({ url: process.env.REDIS_URL });
 await client.connect();
 
 try{
@@ -13,7 +13,7 @@ try{
     console.log(e);
 }
 const server = Bun.serve({
-    port:8080,
+    port: Number(process.env.PORT) || 8080,
     fetch(req, server){
         if(server.upgrade(req)) return;
         return new Response("ws-server up");

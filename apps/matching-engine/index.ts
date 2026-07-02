@@ -2,7 +2,7 @@ import { createClient } from "redis";
 import { match } from "./helper/helper";
 import { restOrder , getOrCreateBook , restoreBook, removeOrder  } from "./src/book";
 
-const client= createClient();
+const client= createClient({ url: process.env.REDIS_URL });
 await client.connect();
 
 // The consumer group must exist before xReadGroup can read from it.
@@ -43,7 +43,7 @@ while(true){
         if(!message) continue;
         const order= message.message;
         if(order.type === "order.cancel"){
-            const removed = removeOrder(order.marketId, order.side as "BUY" || "SELL", Number(order.price), order.orderId);
+            const removed = removeOrder(order.marketId, order.side as "BUY" | "SELL", Number(order.price), order.orderId);
 
             if(removed){
                 await client.xAdd("cancels", "*", {
@@ -64,8 +64,11 @@ while(true){
         const price = Number(order.price);
         const side= order.side as "BUY" | "SELL";
         const leverage= Number(order.leverage);
+
+        const isMarket = order.orderType === "MARKET";
+        const matchPrice= isMarket ? (side === "BUY" ? Infinity :0) : price;
     
-        const {fills , remainingQty} = match(order.userId, order.orderId, order.marketId, side, qty, price , leverage);
+        const {fills , remainingQty} = match(order.userId, order.orderId, order.marketId, side, qty, matchPrice , leverage);
     
         for (const f of fills){
             await client.xAdd("fills", "*", {
@@ -84,16 +87,25 @@ while(true){
     
         // Leftover taker quantity rests in the book as a new maker order.
         if(remainingQty > 0 ){
-            restOrder(order.marketId, side, price, {
-                userId: order.userId,
-                orderId: order.orderId,
-                qty: remainingQty,
-                filledQty: 0,
-                leverage,
-            });
+            if(isMarket){
+                await client.xAdd("cancels", "*", {
+                    orderId:order.orderId,
+                    userId:order.userId,
+                    unfilledQty: String(remainingQty),
+                });
+            }else{
+                restOrder(order.marketId, side, price, {
+                    userId: order.userId,
+                    orderId: order.orderId,
+                    qty: remainingQty,
+                    filledQty: 0,
+                    leverage,
+                });
+            }
         }
     
         const book = getOrCreateBook(order.marketId);
+        if(fills.length) book.lastTradePrice = fills[fills.length -1]!.price; 
         processed.add(order.orderId);
         await client.xAdd("book-updates", "*", {
             marketId:order.marketId,

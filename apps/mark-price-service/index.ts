@@ -1,7 +1,7 @@
 import { createClient } from "redis";
 import { COLLATERAL, prisma, Prisma } from  "@repo/db";
  
-const client = createClient();
+const client = createClient({ url: process.env.REDIS_URL });
 await client.connect();
 
 // The consumer loop below issues a blocking xReadGroup(BLOCK:0) on `client`,
