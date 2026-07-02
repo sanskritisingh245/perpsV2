@@ -1,22 +1,24 @@
-// Runs all four background loops inside ONE Render service (one paid worker
-// instead of four). Each loop is spawned as its own child process so it keeps
-// isolated Redis connections and its own crash domain — no code changes to the
-// matching/settlement logic. If any child exits, we stop the rest and exit
-// non-zero so Render restarts the whole service cleanly.
-const targets = [
-  "apps/matching-engine/index.ts",
-  "apps/db-worker/index.ts",
-  "apps/mark-price-service/index.ts",
-  "apps/snapshot-worker/index.ts",
+// Runs all four background loops in ONE Bun process (one runtime, one shared
+// Prisma client) so it fits the 512MB instance. Spawning them as four separate
+// processes blew past the memory ceiling (two of them load Prisma), and the old
+// "kill everything if one child exits" logic turned any hiccup into a crash loop.
+//
+// Each module has its own Redis connections and an infinite consume loop. We
+// fire them concurrently via dynamic import (ESM caches @repo/db, so Prisma is
+// shared) and isolate failures so one loop dying doesn't take the others down.
+const modules = [
+  "./apps/matching-engine/index.ts",
+  "./apps/db-worker/index.ts",
+  "./apps/mark-price-service/index.ts",
+  "./apps/snapshot-worker/index.ts",
 ];
 
-const procs = targets.map((path) =>
-  Bun.spawn(["bun", "run", path], { stdout: "inherit", stderr: "inherit" }),
-);
+for (const m of modules) {
+  import(m).catch((e) => console.error(`[worker] ${m} crashed:`, e));
+}
 
-// They normally never exit; wait for the first one that does, then tear the
-// rest down so the service restarts as a unit.
-await Promise.race(procs.map((p) => p.exited));
-console.error("a worker process exited — shutting the rest down for a clean restart");
-for (const p of procs) p.kill();
-process.exit(1);
+console.log(`[worker] started ${modules.length} loops in one process`);
+
+// The consume loops never resolve, so the event loop stays alive on its own;
+// this is just a backstop so the process doesn't exit even if every loop dies.
+setInterval(() => {}, 1 << 30);
