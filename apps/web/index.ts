@@ -18,10 +18,18 @@ const server = Bun.serve({
     "/api/*": async (req) => {
       const url = new URL(req.url);
       const target = BACKEND + url.pathname + url.search;
+      // Forward only what the API needs. Passing the raw incoming headers sends
+      // the original Host and Render's internal routing headers upstream, which
+      // Render treats as a request loop and rejects with 508.
+      const headers: Record<string, string> = {};
+      const auth = req.headers.get("authorization");
+      if (auth) headers.authorization = auth;
+      const contentType = req.headers.get("content-type");
+      if (contentType) headers["content-type"] = contentType;
       try {
         const res = await fetch(target, {
           method: req.method,
-          headers: req.headers,
+          headers,
           body: req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer(),
         });
         // Re-wrap so we control the headers we hand back to the browser.
