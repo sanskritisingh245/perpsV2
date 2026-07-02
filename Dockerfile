@@ -10,9 +10,10 @@ WORKDIR /app
 COPY . .
 RUN bun install --frozen-lockfile
 
-# The Prisma client is committed under packages/db/generated, so there is no
-# generate step here. Bun also skips dependency postinstall scripts by default,
-# which is why the committed client is required at runtime.
+# The generated Prisma client is gitignored (not in the repo), so generate it
+# inside the image. The dummy DATABASE_URL just satisfies prisma.config.ts's
+# env("DATABASE_URL") — `generate` produces the client and never connects.
+RUN cd packages/db && DATABASE_URL="postgresql://x:x@localhost:5432/x" bun --bun run prisma generate
 
-# Overridden per service in render.yaml; this default is just a sane fallback.
+# Overridden per service via the Docker Command; this default is a sane fallback.
 CMD ["bun", "run", "apps/backend/index.ts"]
