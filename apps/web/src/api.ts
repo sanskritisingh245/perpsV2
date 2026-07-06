@@ -99,6 +99,9 @@ export function getPositions() {
 export function getOrderbook(marketId: string) {
   return request<{ success: boolean; data: OrderBook }>("GET", `/orderbook/${marketId}`);
 }
+export function getMarkets() {
+  return request<{ success: boolean; data: Market[] }>("GET", "/markets");
+}
 export function getKlines(symbol: string, interval: string, limit = 200) {
   return request<{ success: boolean; data: Candle[] }>(
     "GET",

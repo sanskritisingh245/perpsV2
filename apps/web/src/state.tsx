@@ -8,7 +8,7 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import type { Fill, Market } from "./types";
-import { getToken, setToken, clearToken } from "./api";
+import { getToken, setToken, clearToken, getMarkets } from "./api";
 
 /* ------------------------------------------------------------------ auth */
 
@@ -87,6 +87,20 @@ function MarketsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     localStorage.setItem(MARKETS_KEY, JSON.stringify(markets));
   }, [markets]);
+
+  // Load the global market list from the backend so every account sees every
+  // market, not just the ones added locally. Merge into the cached list.
+  useEffect(() => {
+    getMarkets()
+      .then((res) => {
+        setMarkets((list) => {
+          const byId = new Map(list.map((m) => [m.id, m]));
+          for (const m of res.data) byId.set(m.id, m);
+          return [...byId.values()];
+        });
+      })
+      .catch(() => { /* backend unreachable — keep the cached list */ });
+  }, []);
 
   const add = useCallback((m: Market) => {
     setMarkets((list) => (list.some((x) => x.id === m.id) ? list : [...list, m]));

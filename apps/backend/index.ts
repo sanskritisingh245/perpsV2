@@ -135,6 +135,13 @@ app.post("/api/admin/market", async (req:Request, res:Response) => {
 });
 
 
+// Public list of all markets so every client sees the same set (discovery),
+// instead of each browser only knowing the markets it added locally.
+app.get("/api/markets", async (_req: Request, res: Response) => {
+    const markets = await prisma.market.findMany();
+    return res.json({ success: true, data: markets });
+});
+
 app.post ("/api/on-ramp",authMiddleware, async(req:Request, res:Response)=>{
     const userId=req.id 
     const {success, data}= balanceSchema.safeParse(req.body);
