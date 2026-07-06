@@ -37,17 +37,17 @@ try{
         }
 
     )
-}catch(err){
-    console.log(err)
+}catch(err: any){
+    if (!String(err?.message ?? err).includes("BUSYGROUP")) console.log(err);
 }
 try{
-    await client.xGroupCreate("cancels", "settle-group", "0", 
+    await client.xGroupCreate("cancels", "settle-group", "0",
         {
             MKSTREAM:true
         }
     )
-}catch(err){
-    console.log(err);
+}catch(err: any){
+    if (!String(err?.message ?? err).includes("BUSYGROUP")) console.log(err);
 }
 // replay it's own un-acked fills from a pervious crash
 const recovery = await client.xReadGroup(
@@ -428,8 +428,8 @@ async function settleCancel(c: {orderId: string; userId: string; unfilledQty: st
                 id:c.orderId,
             },data:{
                 status: "CANCELLED"
-            }    
+            }
         });
-    })
+    }, { maxWait: 15000, timeout: 30000 })
     
 }

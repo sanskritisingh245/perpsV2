@@ -8,7 +8,7 @@ try{
         MKSTREAM:true
     });
 }catch(e:any){
-    console.log(e.message)
+    if (!String(e?.message ?? e).includes("BUSYGROUP")) console.log(e.message);
 }
 
 while(true){

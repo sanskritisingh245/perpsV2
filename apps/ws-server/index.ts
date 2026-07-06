@@ -9,8 +9,8 @@ try{
             MKSTREAM:true
         }
     )
-}catch(e){
-    console.log(e);
+}catch(e: any){
+    if (!String(e?.message ?? e).includes("BUSYGROUP")) console.log(e);
 }
 const server = Bun.serve({
     port: Number(process.env.PORT) || 8080,

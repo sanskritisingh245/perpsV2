@@ -17,8 +17,8 @@ try{
             MKSTREAM:true
         }
     )
-}catch(e){
-    console.log(e);
+}catch(e: any){
+    if (!String(e?.message ?? e).includes("BUSYGROUP")) console.log(e);
 }
 setInterval(async ()=> {
     const positions = await prisma.position.findMany();
