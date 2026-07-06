@@ -1,4 +1,4 @@
-import express, { response, type Request, type Response } from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import bcrypt from "bcrypt";
 import { SignupSchema } from "./zod/auth";
 import { COLLATERAL, OrderType, prisma, Prisma } from "@repo/db";
@@ -429,6 +429,19 @@ app.get("/api/klines/:symbol", async (req: Request, res: Response) => {
     } catch {
         return res.status(502).json({ success: false, error: "BINANCE_UNREACHABLE" });
     }
+});
+
+// One-shot DB reachability probe: the logs show immediately (with the Prisma
+// error code) whether THIS instance can actually talk to Postgres.
+prisma.user.count()
+    .then((n) => console.log(`[db] ok — ${n} users`))
+    .catch((e: any) => console.error(`[db] STARTUP FAILED code=${e?.code} name=${e?.name} msg=${e?.message}`));
+
+// Log the real cause of any 500 (esp. the Prisma code) instead of leaking a
+// stack trace, and hand the client the code rather than "HTTP 500".
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    console.error("[error]", err?.code ?? "", err?.name ?? "", err?.message ?? err);
+    res.status(500).json({ success: false, error: err?.code || "SERVER_ERROR" });
 });
 
 const PORT = Number(process.env.PORT) || 3000;
