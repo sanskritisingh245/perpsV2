@@ -124,7 +124,7 @@ export function Trade() {
 
       <div className="trow">
         {/* symbols */}
-        <div className="col-fixed" style={{ width: split.symW }}>
+        <div className="col-fixed col-symbols" style={{ width: split.symW }}>
           <div className="pcard">
             <div className="panel-head"><span className="panel-title">Markets</span></div>
             <div className="panel-body">
@@ -153,7 +153,7 @@ export function Trade() {
         <VSplit onDelta={(dx) => setSplit((s) => ({ ...s, symW: clamp(s.symW + dx, 150, 420) }))} />
 
         {/* chart + bottom (flex column) */}
-        <div className="col-flex">
+        <div className="col-flex col-main">
           <div className="pcard">
             <div className="panel-head"><span className="panel-title">Chart</span></div>
             <div className="panel-body">
@@ -207,7 +207,7 @@ export function Trade() {
         <VSplit onDelta={(dx) => setSplit((s) => ({ ...s, obW: clamp(s.obW - dx, 190, 520) }))} />
 
         {/* order book */}
-        <div className="col-fixed" style={{ width: split.obW }}>
+        <div className="col-fixed col-book" style={{ width: split.obW }}>
           <div className="pcard">
             <div className="panel-head"><span className="panel-title">Order Book</span></div>
             <div className="panel-body"><OrderBook symbol={symbol} /></div>
@@ -217,7 +217,7 @@ export function Trade() {
         <VSplit onDelta={(dx) => setSplit((s) => ({ ...s, obW: clamp(s.obW + dx, 190, 520), orderW: clamp(s.orderW - dx, 190, 460) }))} />
 
         {/* order panel */}
-        <div className="col-fixed" style={{ width: split.orderW }}>
+        <div className="col-fixed col-order" style={{ width: split.orderW }}>
           <div className="pcard">
             <div className="panel-head"><span className="panel-title">Buy / Sell</span></div>
             <div className="panel-body"><OrderForm market={market} lastPrice={last} balance={balance} onPlaced={refresh} /></div>

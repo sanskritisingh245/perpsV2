@@ -3,9 +3,47 @@ import type { Candle } from "../types";
 import { getKlines } from "../api";
 import { num } from "../format";
 
-const UP = "#2ebd85";
-const DOWN = "#f6465d";
-const ACCENT = "#fcd535";
+// Chart colors are pulled from the app's CSS theme tokens (globals.css) so the
+// chart always matches the rest of the terminal — same single source of truth
+// styles.css uses. The literals below are dark-theme fallbacks for the first
+// paint (globals.css is imported synchronously, so reads normally resolve).
+type Palette = {
+  up: string; down: string; accent: string;
+  grid: string; axis: string; cross: string;
+  tipBg: string; tipBorder: string; tipText: string; tipDim: string; ink: string;
+};
+const FALLBACK: Palette = {
+  up: "#34d399",             // --success
+  down: "#ef4444",           // --destructive
+  accent: "#3b82f6",         // --primary (blue)
+  grid: "rgba(255,255,255,0.05)",
+  axis: "#9a9aa4",           // --muted-foreground
+  cross: "#3a3a43",
+  tipBg: "#191a1d",          // --popover
+  tipBorder: "#2a2a30",      // --border
+  tipText: "#9a9aa4",        // --muted-foreground
+  tipDim: "#63636d",         // --muted-2
+  ink: "#0a0a0b",            // --background (dark text on colored chips)
+};
+function readPalette(): Palette {
+  if (typeof window === "undefined") return FALLBACK;
+  const s = getComputedStyle(document.documentElement);
+  const v = (name: string, fb: string) => s.getPropertyValue(name).trim() || fb;
+  return {
+    up: v("--success", FALLBACK.up),
+    down: v("--destructive", FALLBACK.down),
+    accent: v("--primary", FALLBACK.accent),
+    grid: FALLBACK.grid,
+    axis: v("--muted-foreground", FALLBACK.axis),
+    cross: v("--border", FALLBACK.cross),
+    tipBg: v("--popover", FALLBACK.tipBg),
+    tipBorder: v("--border", FALLBACK.tipBorder),
+    tipText: v("--muted-foreground", FALLBACK.tipText),
+    tipDim: FALLBACK.tipDim,
+    ink: v("--background", FALLBACK.ink),
+  };
+}
+
 const RANGE_LERP = 0.08;  // y-axis eases (8%/frame), snaps outward
 const CANDLE_LERP = 0.22; // forming candle eases toward each live tick
 const ZOOM_LERP = 0.2;    // visible-count eases when zooming → candles expand smoothly
@@ -26,6 +64,7 @@ export function PriceChart({ symbol, interval, mode }: { symbol: string; interva
   const [hover, setHover] = useState<number | null>(null);
   const [live, setLive] = useState(false);
   const [targetVis, setTargetVis] = useState(DEFAULT_VIS); // how many candles to show
+  const [pal] = useState(readPalette); // theme colors, read once from CSS tokens
 
   useEffect(() => {
     if (!box.current) return;
@@ -193,7 +232,7 @@ export function PriceChart({ symbol, interval, mode }: { symbol: string; interva
         <Svg
           candles={view.candles} lo={view.lo} hi={view.hi} vis={view.vis} mode={mode}
           w={w} h={h} pad={pad} iw={iw} ih={ih}
-          hover={hover} setHover={setHover}
+          hover={hover} setHover={setHover} pal={pal}
         />
       )}
     </div>
@@ -201,7 +240,7 @@ export function PriceChart({ symbol, interval, mode }: { symbol: string; interva
 }
 
 function Svg({
-  candles, lo, hi, vis, mode, w, h, pad, iw, ih, hover, setHover,
+  candles, lo, hi, vis, mode, w, h, pad, iw, ih, hover, setHover, pal,
 }: {
   candles: Candle[];
   lo: number; hi: number; vis: number;
@@ -211,6 +250,7 @@ function Svg({
   iw: number; ih: number;
   hover: number | null;
   setHover: (i: number | null) => void;
+  pal: Palette;
 }) {
   const span = hi - lo || hi || 1;
   const n = candles.length;
@@ -242,8 +282,8 @@ function Svg({
     <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
       <defs>
         <linearGradient id="lfill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={ACCENT} stopOpacity="0.20" />
-          <stop offset="100%" stopColor={ACCENT} stopOpacity="0" />
+          <stop offset="0%" stopColor={pal.accent} stopOpacity="0.20" />
+          <stop offset="100%" stopColor={pal.accent} stopOpacity="0" />
         </linearGradient>
         <clipPath id="plot"><rect x={pad.l} y={pad.t - 2} width={iw} height={ih + 4} /></clipPath>
       </defs>
@@ -252,8 +292,8 @@ function Svg({
         const gy = pad.t + g * ih;
         return (
           <g key={g}>
-            <line x1={pad.l} x2={pad.l + iw} y1={gy} y2={gy} stroke="#1c232b" strokeWidth="1" />
-            <text x={pad.l + iw + 5} y={gy + 3} fontSize="10" fill="#5e6673" fontFamily="ui-monospace, monospace">
+            <line x1={pad.l} x2={pad.l + iw} y1={gy} y2={gy} stroke={pal.grid} strokeWidth="1" />
+            <text x={pad.l + iw + 5} y={gy + 3} fontSize="10" fill={pal.axis} fontFamily="ui-monospace, monospace">
               {num(hi - g * span)}
             </text>
           </g>
@@ -261,7 +301,7 @@ function Svg({
       })}
 
       {ticks.map((i) => (
-        <text key={i} x={cx(i)} y={h - 6} fontSize="10" fill="#5e6673" textAnchor="middle" fontFamily="ui-monospace, monospace">
+        <text key={i} x={cx(i)} y={h - 6} fontSize="10" fill={pal.axis} textAnchor="middle" fontFamily="ui-monospace, monospace">
           {new Date(candles[i]!.t).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })}
         </text>
       ))}
@@ -270,7 +310,7 @@ function Svg({
         {mode === "candle" ? (
           candles.map((c, i) => {
             const up = c.c >= c.o;
-            const color = up ? UP : DOWN;
+            const color = up ? pal.up : pal.down;
             const yo = y(c.o);
             const yc = y(c.c);
             const top = Math.min(yo, yc);
@@ -287,7 +327,7 @@ function Svg({
         ) : (
           <>
             <path d={areaPath} fill="url(#lfill)" />
-            <path d={linePath} fill="none" stroke={ACCENT} strokeWidth="1.6" />
+            <path d={linePath} fill="none" stroke={pal.accent} strokeWidth="1.6" />
           </>
         )}
       </g>
@@ -299,11 +339,11 @@ function Svg({
         const tx = boxX + 8;
         return (
           <>
-            <line x1={cx(hover!)} x2={cx(hover!)} y1={pad.t} y2={pad.t + ih} stroke="#3a4350" strokeWidth="1" strokeDasharray="3 3" />
-            <rect x={boxX} y={boxY} width={144} height={56} rx={4} fill="#0b0e11" stroke="#2b3139" />
-            <text x={tx} y={boxY + 16} fontSize="10" fill="#848e9c" fontFamily="ui-monospace, monospace">O {num(hc.o)}  H {num(hc.h)}</text>
-            <text x={tx} y={boxY + 30} fontSize="10" fill="#848e9c" fontFamily="ui-monospace, monospace">L {num(hc.l)}  C {num(hc.c)}</text>
-            <text x={tx} y={boxY + 46} fontSize="10" fill="#5e6673" fontFamily="ui-monospace, monospace">
+            <line x1={cx(hover!)} x2={cx(hover!)} y1={pad.t} y2={pad.t + ih} stroke={pal.cross} strokeWidth="1" strokeDasharray="3 3" />
+            <rect x={boxX} y={boxY} width={144} height={56} rx={4} fill={pal.tipBg} stroke={pal.tipBorder} />
+            <text x={tx} y={boxY + 16} fontSize="10" fill={pal.tipText} fontFamily="ui-monospace, monospace">O {num(hc.o)}  H {num(hc.h)}</text>
+            <text x={tx} y={boxY + 30} fontSize="10" fill={pal.tipText} fontFamily="ui-monospace, monospace">L {num(hc.l)}  C {num(hc.c)}</text>
+            <text x={tx} y={boxY + 46} fontSize="10" fill={pal.tipDim} fontFamily="ui-monospace, monospace">
               {new Date(hc.t).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}
             </text>
           </>
@@ -311,9 +351,9 @@ function Svg({
       })()}
 
       {/* last price marker (rides the animated close) */}
-      <line x1={pad.l} x2={pad.l + iw} y1={lastY} y2={lastY} stroke={lastUp ? UP : DOWN} strokeWidth="0.5" strokeDasharray="3 3" opacity="0.8" />
-      <rect x={pad.l + iw + 1} y={lastY - 8} width={pad.r - 2} height={16} rx={2} fill={lastUp ? UP : DOWN} />
-      <text x={pad.l + iw + 5} y={lastY + 4} fontSize="10" fill="#0b0e11" fontFamily="ui-monospace, monospace">
+      <line x1={pad.l} x2={pad.l + iw} y1={lastY} y2={lastY} stroke={lastUp ? pal.up : pal.down} strokeWidth="0.5" strokeDasharray="3 3" opacity="0.8" />
+      <rect x={pad.l + iw + 1} y={lastY - 8} width={pad.r - 2} height={16} rx={2} fill={lastUp ? pal.up : pal.down} />
+      <text x={pad.l + iw + 5} y={lastY + 4} fontSize="10" fill={pal.ink} fontFamily="ui-monospace, monospace">
         {num(last.c)}
       </text>
     </svg>

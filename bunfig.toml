@@ -1,0 +1,5 @@
+# Production runs `bun run apps/web/index.ts` from the repo root, so the Tailwind
+# bundler plugin must be registered here too (mirrors apps/web/bunfig.toml,
+# which covers local `bun run dev` from inside apps/web).
+[serve.static]
+plugins = ["bun-plugin-tailwind"]

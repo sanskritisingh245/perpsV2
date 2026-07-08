@@ -35,7 +35,7 @@ export function Wallet() {
       setAmount("");
       load();
     } catch (e: any) {
-      push("err", e.message);
+      push("err", friendlyError(e.message));
     } finally {
       setBusy(false);
     }
@@ -107,4 +107,26 @@ export function Wallet() {
       {showAdd && <AddMarket onClose={() => setShowAdd(false)} />}
     </div>
   );
+}
+
+// Turn raw backend/Prisma error codes into something a user can act on.
+function friendlyError(code: string): string {
+  switch (code) {
+    // Prisma P2003 = foreign-key constraint: the on-ramp tried to create a
+    // Balance for a userId that has no matching User row — i.e. the logged-in
+    // token no longer maps to a user in the backend DB (reset DB, or a token
+    // minted against another environment). Re-authenticating fixes it.
+    case "P2003": return "Your session is out of date — log out and sign in again";
+    case "P2002": return "That already exists";
+    case "P2025": return "Account not found — log out and sign in again";
+    case "INVALID_DATA": return "Enter a valid amount";
+    case "NOT_ENOUGH_BALANCE": return "Not enough balance";
+    case "INCORRECT_TOKEN":
+    case "UNAUTHORIZED":
+    case "token not found ehhh": return "Please sign in again";
+    case "BACKEND_UNREACHABLE": return "Backend is offline — try again shortly";
+    default:
+      // Hide any other raw Prisma code (P####); pass through readable messages.
+      return /^P\d{4}$/.test(code) ? "Something went wrong — please try again" : code;
+  }
 }

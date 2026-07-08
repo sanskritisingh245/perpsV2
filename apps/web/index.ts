@@ -33,7 +33,15 @@ const server = Bun.serve({
           body: req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer(),
         });
         // Re-wrap so we control the headers we hand back to the browser.
-        return new Response(res.body, { status: res.status, headers: res.headers });
+        // fetch() has already decoded res.body per the upstream Content-Encoding,
+        // but res.headers still advertises that encoding (br/gzip) and the original
+        // (now-wrong) Content-Length. Forwarding them makes the browser try to
+        // decode an already-decoded body → ERR_CONTENT_DECODING_FAILED and empty
+        // API responses (blank app). Strip both; the runtime sets them afresh.
+        const outHeaders = new Headers(res.headers);
+        outHeaders.delete("content-encoding");
+        outHeaders.delete("content-length");
+        return new Response(res.body, { status: res.status, headers: outHeaders });
       } catch {
         return Response.json({ success: false, error: "BACKEND_UNREACHABLE" }, { status: 502 });
       }

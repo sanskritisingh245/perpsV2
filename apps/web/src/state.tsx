@@ -7,6 +7,7 @@ import {
   useCallback,
 } from "react";
 import type { ReactNode } from "react";
+import { toast } from "sonner";
 import type { Fill, Market } from "./types";
 import { getToken, setToken, clearToken, getMarkets } from "./api";
 
@@ -44,19 +45,17 @@ export function useAuth() {
 
 /* ----------------------------------------------------------------- toasts */
 
-type Toast = { id: number; kind: "ok" | "err"; msg: string };
-type ToastCtx = { push: (kind: "ok" | "err", msg: string) => void; toasts: Toast[] };
+// Toasts are rendered by Sonner (see components/ui/sonner). This just keeps the
+// app's tiny push(kind, msg) API so callers don't need to know about Sonner.
+type ToastCtx = { push: (kind: "ok" | "err", msg: string) => void };
 const ToastContext = createContext<ToastCtx | null>(null);
 
 function ToastProvider({ children }: { children: ReactNode }) {
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  const seq = useRef(0);
   const push = useCallback((kind: "ok" | "err", msg: string) => {
-    const id = ++seq.current;
-    setToasts((t) => [...t, { id, kind, msg }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3500);
+    if (kind === "ok") toast.success(msg);
+    else toast.error(msg);
   }, []);
-  return <ToastContext.Provider value={{ push, toasts }}>{children}</ToastContext.Provider>;
+  return <ToastContext.Provider value={{ push }}>{children}</ToastContext.Provider>;
 }
 export function useToast() {
   const c = useContext(ToastContext);

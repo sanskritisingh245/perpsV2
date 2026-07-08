@@ -1,0 +1,3 @@
+# Let Bun's HTML bundler (used by Bun.serve in index.ts) compile Tailwind CSS.
+[serve.static]
+plugins = ["bun-plugin-tailwind"]

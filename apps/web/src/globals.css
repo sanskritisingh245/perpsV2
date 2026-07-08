@@ -1,0 +1,114 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+  Minimal skeuomorphism on a shadcn base:
+  flat, neutral surfaces + ONE hairline top bevel and a soft drop shadow so
+  cards/buttons feel physical without gloss. Dark-only; blue is the one accent.
+*/
+:root {
+  --radius: 0.7rem;
+
+  --background: #0a0a0b;
+  --foreground: #fafafa;
+
+  --card: #151517;
+  --card-foreground: #fafafa;
+
+  --popover: #191a1d;
+  --popover-foreground: #fafafa;
+
+  --primary: #3b82f6; /* blue */
+  --primary-foreground: #ffffff;
+
+  --secondary: #202024;
+  --secondary-foreground: #fafafa;
+
+  --muted: #1c1c20;
+  --muted-foreground: #9a9aa4;
+
+  --accent: #26262c;
+  --accent-foreground: #fafafa;
+
+  --destructive: #ef4444;
+  --destructive-foreground: #fafafa;
+
+  --success: #34d399;
+  --success-foreground: #052e1b;
+
+  --border: #2a2a30;
+  --input: #232329;
+  --ring: #3b82f6;
+
+  /* skeuomorphic depth primitives */
+  --bevel-top: rgba(255, 255, 255, 0.06);
+  --bevel-top-strong: rgba(255, 255, 255, 0.1);
+  --sink: rgba(0, 0, 0, 0.55);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "cv11", "ss01";
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* ---- restrained skeuomorphic utilities ---- */
+
+/* raised surface: hairline top highlight + soft grounding shadow */
+@utility bevel {
+  box-shadow:
+    inset 0 1px 0 0 var(--bevel-top),
+    0 1px 2px 0 var(--sink);
+}
+@utility bevel-lg {
+  box-shadow:
+    inset 0 1px 0 0 var(--bevel-top-strong),
+    0 12px 30px -12px var(--sink);
+}
+/* pressed / recessed input well */
+@utility sunken {
+  box-shadow:
+    inset 0 1px 2px 0 rgba(0, 0, 0, 0.5),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.015);
+}
+/* subtle top-lit vertical sheen for accent buttons */
+@utility sheen {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0) 45%);
+}

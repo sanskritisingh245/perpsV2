@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { useAuth, useToast } from "../state";
+import { useAuth } from "../state";
 import { Login } from "./Login";
 import { Header } from "./Header";
 import { Trade } from "./Trade";
 import { Wallet } from "./Wallet";
+import { Toaster } from "@/components/ui/sonner";
 
 export function App() {
   const { signedIn } = useAuth();
@@ -21,18 +22,5 @@ export function App() {
       )}
       <Toaster />
     </>
-  );
-}
-
-function Toaster() {
-  const { toasts } = useToast();
-  return (
-    <div className="toasts">
-      {toasts.map((t) => (
-        <div key={t.id} className={"toast " + t.kind}>
-          {t.msg}
-        </div>
-      ))}
-    </div>
   );
 }

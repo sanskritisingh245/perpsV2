@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { signin, signup } from "../api";
 import { useAuth, useToast } from "../state";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export function Login() {
   const { login } = useAuth();
@@ -35,52 +40,56 @@ export function Login() {
   }
 
   return (
-    <div className="center">
-      <form className="card" onSubmit={submit}>
-        <div className="logo" style={{ marginBottom: 18 }}>
-          <span className="mark">◆</span> Perp
-        </div>
-        <h1>{mode === "in" ? "Sign in" : "Create account"}</h1>
-        <p className="sub">
-          {mode === "in" ? "Welcome back. Trade perpetuals." : "Start trading in seconds."}
-        </p>
-
-        <div className="field">
-          <label>Username</label>
-          <div className="input">
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="satoshi"
-              autoFocus
-            />
+    <div className="min-h-screen flex items-center justify-center bg-background p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <div className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+            <span className="grid size-7 place-items-center rounded-md bg-primary/15 text-primary bevel">◆</span>
+            Perp
           </div>
-        </div>
-        <div className="field">
-          <label>Password</label>
-          <div className="input">
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-            />
-          </div>
-        </div>
+          <CardTitle className="mt-4">{mode === "in" ? "Sign in" : "Create account"}</CardTitle>
+          <CardDescription>
+            {mode === "in" ? "Welcome back. Trade perpetuals." : "Start trading in seconds."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5">
+          <Tabs value={mode} onValueChange={(v) => { setMode(v as "in" | "up"); setErr(""); }}>
+            <TabsList>
+              <TabsTrigger value="in">Sign in</TabsTrigger>
+              <TabsTrigger value="up">Create</TabsTrigger>
+            </TabsList>
+          </Tabs>
 
-        <div className="err">{err}</div>
+          <form className="flex flex-col gap-4" onSubmit={submit}>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="username">Username</Label>
+              <Input
+                id="username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="satoshi"
+                autoFocus
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+              />
+            </div>
 
-        <button className="btn gold" style={{ width: "100%" }} disabled={busy}>
-          {busy ? "Please wait…" : mode === "in" ? "Sign in" : "Sign up"}
-        </button>
+            {err && <p className="text-sm font-medium text-destructive">{err}</p>}
 
-        <div className="switchline">
-          {mode === "in" ? "New here?" : "Already have an account?"}{" "}
-          <button type="button" onClick={() => { setMode(mode === "in" ? "up" : "in"); setErr(""); }}>
-            {mode === "in" ? "Create one" : "Sign in"}
-          </button>
-        </div>
-      </form>
+            <Button type="submit" className="w-full" disabled={busy}>
+              {busy ? "Please wait…" : mode === "in" ? "Sign in" : "Sign up"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -91,7 +100,7 @@ function prettyError(code: string): string {
     case "INCORRECT_CREDENTIALS": return "No such user";
     case "INCORRECT_PASSWORD": return "Wrong password";
     case "INVALID_DATA": return "Check your input";
-    case "BACKEND_UNREACHABLE": return "Backend is offline (start it on :3000)";
+    case "BACKEND_UNREACHABLE": return "Backend is offline";
     default: return code;
   }
 }

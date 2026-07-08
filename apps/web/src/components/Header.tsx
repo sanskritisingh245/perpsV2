@@ -1,31 +1,19 @@
-import { useEffect, useRef, useState } from "react";
 import { useAuth, useFills } from "../state";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 type Tab = "trade" | "wallet";
 
 export function Header({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
   const { logout } = useAuth();
   const { connected } = useFills();
-  const [open, setOpen] = useState(false);
-  const [closing, setClosing] = useState(false);
-  const wrap = useRef<HTMLDivElement>(null);
-  const openRef = useRef(false);
-  openRef.current = open;
-
-  // play the exit animation, then unmount
-  const close = () => {
-    if (!openRef.current) return;
-    setClosing(true);
-    setTimeout(() => { setOpen(false); setClosing(false); }, 170);
-  };
-
-  useEffect(() => {
-    const h = (e: MouseEvent) => {
-      if (wrap.current && !wrap.current.contains(e.target as Node)) close();
-    };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, []);
 
   return (
     <header className="header">
@@ -46,25 +34,25 @@ export function Header({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
           <span className={"dot" + (connected ? " on" : "")} />
           {connected ? "Live" : "Offline"}
         </span>
-        <button className="btn gold sm" onClick={() => onTab("wallet")}>
+        <Button size="sm" onClick={() => onTab("wallet")}>
           Deposit
-        </button>
-        <div className="menu-wrap" ref={wrap}>
-          <button className="avatar" onClick={() => (open ? close() : setOpen(true))}>
-            ◆
-          </button>
-          {open && (
-            <div className={"menu" + (closing ? " closing" : "")}>
-              <div className="who">
-                <b>Trader</b>
-                <span className="muted">Signed in</span>
-              </div>
-              <a onClick={() => { onTab("trade"); close(); }}>Trade</a>
-              <a onClick={() => { onTab("wallet"); close(); }}>Wallet</a>
-              <button onClick={logout}>Log out</button>
-            </div>
-          )}
-        </div>
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="avatar" aria-label="Account menu">◆</button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuLabel>
+              <span className="block font-semibold text-foreground">Trader</span>
+              <span className="block text-xs text-muted-foreground">Signed in</span>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => onTab("trade")}>Trade</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onTab("wallet")}>Wallet</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={logout}>Log out</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );
