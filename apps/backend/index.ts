@@ -413,48 +413,6 @@ app.get("/api/orderbook/:marketId", async (req: Request, res: Response) => {
     });
 });
 
-// Candlestick history, proxied through us from Bybit (not Binance): Binance
-// both geo-blocks our own Render IP AND gets domain-blocked by some ISPs for
-// end users (its live WebSocket stream still works for those users only
-// because it's on a different subdomain some blocklists haven't caught up
-// to). Bybit's linear-perp symbols match Binance's ("BTCUSDT"), so no
-// remapping is needed, and neither of those two blocks apply to it. Fetching
-// here (rather than from the browser) means the client only ever talks to
-// our own domain for history, so no exchange blocklist can interfere.
-const BYBIT_INTERVAL: Record<string, string> = {
-    "1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30",
-    "1h": "60", "2h": "120", "4h": "240", "6h": "360", "8h": "360", "12h": "720",
-    "1d": "D", "3d": "D", "1w": "W", "1M": "M",
-};
-app.get("/api/klines/:symbol", async (req: Request, res: Response) => {
-    const symbol = String(req.params.symbol).toUpperCase();
-    const interval = BYBIT_INTERVAL[String(req.query.interval)] ?? "15";
-    const limit = Math.min(1000, Math.max(10, Number(req.query.limit) || 200));
-    const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`;
-    try {
-        const r = await fetch(url, { signal: AbortSignal.timeout(5000) });
-        if (!r.ok) {
-            return res.status(502).json({ success: false, error: "BYBIT_REJECTED" });
-        }
-        const body = (await r.json()) as any;
-        const list = (body?.result?.list ?? []) as any[];
-        // Bybit returns newest-first; the chart wants oldest-first.
-        const candles = list
-            .map((k) => ({
-                t: Number(k[0]),
-                o: Number(k[1]),
-                h: Number(k[2]),
-                l: Number(k[3]),
-                c: Number(k[4]),
-                v: Number(k[5]),
-            }))
-            .reverse();
-        return res.json({ success: true, data: candles });
-    } catch {
-        return res.status(502).json({ success: false, error: "BYBIT_UNREACHABLE" });
-    }
-});
-
 // One-shot DB reachability probe: the logs show immediately (with the Prisma
 // error code) whether THIS instance can actually talk to Postgres.
 prisma.user.count()

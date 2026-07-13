@@ -102,16 +102,40 @@ export function getOrderbook(marketId: string) {
 export function getMarkets() {
   return request<{ success: boolean; data: Market[] }>("GET", "/markets");
 }
-// Proxied through our backend, which fetches from Bybit (not Binance): some
-// ISPs domain-block Binance's REST endpoint for end users even though its
-// WebSocket subdomain (used for the live stream below) isn't caught by the
-// same blocklist, and Binance separately blocks our backend's own IP. Bybit
-// isn't affected by either restriction and uses the same symbol convention.
-export function getKlines(symbol: string, interval: string, limit = 200) {
-  return request<{ success: boolean; data: Candle[] }>(
-    "GET",
-    `/klines/${symbol}?interval=${interval}&limit=${limit}`,
-  );
+// Fetched directly from Bybit, not proxied through our backend: Bybit is
+// legally required to geo-block US IPs (CFTC settlement), and our backend
+// runs on Render in Oregon, so it gets rejected the same way Binance's REST
+// endpoint blocks it too (for an unrelated reason — anti-cloud-IP policy).
+// The browser isn't in the US, and Bybit's kline endpoint sends CORS headers
+// that explicitly allow being called from arbitrary origins.
+const BYBIT_INTERVAL: Record<string, string> = {
+  "1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30",
+  "1h": "60", "2h": "120", "4h": "240", "6h": "360", "8h": "360", "12h": "720",
+  "1d": "D", "3d": "D", "1w": "W", "1M": "M",
+};
+export async function getKlines(
+  symbol: string,
+  interval: string,
+  limit = 200,
+): Promise<{ success: boolean; data: Candle[] }> {
+  const bybitInterval = BYBIT_INTERVAL[interval] ?? "15";
+  const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${encodeURIComponent(symbol)}&interval=${bybitInterval}&limit=${limit}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new ApiError("BYBIT_REJECTED", r.status);
+  const body = (await r.json()) as any;
+  const list = (body?.result?.list ?? []) as any[];
+  // Bybit returns newest-first; the chart wants oldest-first.
+  const data: Candle[] = list
+    .map((k) => ({
+      t: Number(k[0]),
+      o: Number(k[1]),
+      h: Number(k[2]),
+      l: Number(k[3]),
+      c: Number(k[4]),
+      v: Number(k[5]),
+    }))
+    .reverse();
+  return { success: true, data };
 }
 
 // Map a market slug (e.g. "BTC-PERP") to a Binance spot symbol ("BTCUSDT").
