@@ -102,11 +102,30 @@ export function getOrderbook(marketId: string) {
 export function getMarkets() {
   return request<{ success: boolean; data: Market[] }>("GET", "/markets");
 }
-export function getKlines(symbol: string, interval: string, limit = 200) {
-  return request<{ success: boolean; data: Candle[] }>(
-    "GET",
-    `/klines/${symbol}?interval=${interval}&limit=${limit}`,
-  );
+// Fetched directly from Binance (browser → Binance), not proxied through our
+// backend: Binance geo-blocks US cloud datacenter IPs (incl. Render), so a
+// backend-side fetch hangs ~35s then 502s. The browser's IP isn't blocked —
+// same reason the live WebSocket stream in PriceChart connects straight to
+// Binance instead of through us. Binance's REST API sends
+// access-control-allow-origin: * so this works cross-origin.
+export async function getKlines(
+  symbol: string,
+  interval: string,
+  limit = 200,
+): Promise<{ success: boolean; data: Candle[] }> {
+  const url = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new ApiError("BINANCE_REJECTED", r.status);
+  const raw = (await r.json()) as any[];
+  const data: Candle[] = raw.map((k) => ({
+    t: k[0],
+    o: Number(k[1]),
+    h: Number(k[2]),
+    l: Number(k[3]),
+    c: Number(k[4]),
+    v: Number(k[5]),
+  }));
+  return { success: true, data };
 }
 
 // Map a market slug (e.g. "BTC-PERP") to a Binance spot symbol ("BTCUSDT").

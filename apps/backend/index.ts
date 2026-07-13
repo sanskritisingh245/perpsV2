@@ -407,9 +407,11 @@ app.get("/api/orderbook/:marketId", async (req: Request, res: Response) => {
     });
 });
 
-// Candlestick data proxied from Binance's public market-data API (no key
-// needed). The browser can't call Binance directly here, and this keeps the
-// chart backed by real OHLC instead of the session-only fills tape.
+// Legacy candlestick proxy — unused by the frontend now (it fetches Binance
+// directly from the browser instead, see apps/web/src/api.ts::getKlines).
+// Binance geo-blocks Render's US datacenter IP, so this route's fetch never
+// gets a response; it's kept only so a stray caller fails in 3s instead of
+// hanging ~35s for Render's platform-level timeout to 502 it.
 const KLINE_INTERVALS = new Set([
     "1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d","3d","1w","1M",
 ]);
@@ -419,7 +421,7 @@ app.get("/api/klines/:symbol", async (req: Request, res: Response) => {
     const limit = Math.min(1000, Math.max(10, Number(req.query.limit) || 200));
     const url = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`;
     try {
-        const r = await fetch(url);
+        const r = await fetch(url, { signal: AbortSignal.timeout(3000) });
         if (!r.ok) {
             return res.status(502).json({ success: false, error: "BINANCE_REJECTED" });
         }
