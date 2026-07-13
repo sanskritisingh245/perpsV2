@@ -18,6 +18,12 @@ if(!JWT_SECRET || !ADMIN_SECRET){
 
 
 const client=createClient({ url: process.env.REDIS_URL });//publish message (falls back to localhost when REDIS_URL is unset)
+// node-redis rethrows unlistened "error" events as uncaught exceptions, which
+// kills the whole process (this is what crash-looped the service when the
+// Upstash plan's request quota ran out — every command errored, and every
+// error took the process down with it). Logging instead keeps the rest of
+// the API (markets, klines, auth) serving even while Redis itself is down.
+client.on("error", (err) => console.error("[redis] error", err?.message ?? err));
 client.connect();
 
 
