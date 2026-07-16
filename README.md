@@ -4,6 +4,10 @@
 
 ---
 
+
+https://github.com/user-attachments/assets/8fadb08c-94d0-49d9-a17a-fa1d400c83ad
+
+
 ## Why
 
 Building a perp exchange means solving the same three problems every real venue does: matching orders fairly and fast, keeping every account's margin correct under concurrent fills, and never losing an order or a fill even when a service crashes mid-flight. perpV2 tackles all three with a deliberately small set of single-purpose services connected by Redis Streams, and Postgres as the durable source of truth — no service holds state the others can't recover from a restart.
