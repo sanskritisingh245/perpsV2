@@ -1,5 +1,9 @@
 # Production runs `bun run apps/web/index.ts` from the repo root, so the Tailwind
 # bundler plugin must be registered here too (mirrors apps/web/bunfig.toml,
 # which covers local `bun run dev` from inside apps/web).
+#
+# Path, not bare name: bun installs workspaces isolated, so the plugin only
+# exists under apps/web/node_modules. A bare name resolves from the repo root,
+# fails, and Bun.serve then serves "/" as an empty page.
 [serve.static]
-plugins = ["bun-plugin-tailwind"]
+plugins = ["./apps/web/node_modules/bun-plugin-tailwind"]
