@@ -12,7 +12,7 @@ import {
 type Tab = "trade" | "wallet";
 
 export function Header({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
-  const { logout } = useAuth();
+  const { logout, signedIn, openAuth } = useAuth();
   const { connected } = useFills();
 
   return (
@@ -34,6 +34,17 @@ export function Header({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
           <span className={"dot" + (connected ? " on" : "")} />
           {connected ? "Live" : "Offline"}
         </span>
+        {!signedIn ? (
+          <>
+            <Button size="sm" variant="ghost" onClick={() => openAuth("in")}>
+              Sign in
+            </Button>
+            <Button size="sm" onClick={() => openAuth("up")}>
+              Sign up
+            </Button>
+          </>
+        ) : (
+        <>
         <Button size="sm" onClick={() => onTab("wallet")}>
           Deposit
         </Button>
@@ -53,6 +64,8 @@ export function Header({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
             <DropdownMenuItem onClick={logout}>Log out</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        </>
+        )}
       </div>
     </header>
   );

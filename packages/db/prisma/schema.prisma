@@ -40,9 +40,17 @@ model Order{
   price         String?
   slippage      Int?
   qty           String
+  leverage      Int
   initialMargin String
   filledQty     String
   status        OrderStatus
+  // Whether the "order.created" event has been published to the Redis
+  // `orders` stream yet. The matching engine only learns about an order via
+  // that stream, so if the publish fails after the order is already
+  // committed here, this stays false and the reconciliation sweep in
+  // apps/backend/index.ts retries it — instead of the order silently sitting
+  // OPEN forever.
+  eventPublished Boolean @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt()
   maker_fills   Fill[]  @relation("maker")

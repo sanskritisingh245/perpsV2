@@ -56,15 +56,10 @@ export type OrderBook = {
 };
 
 // Raw fill broadcast by the ws-server (all fields are strings off the stream).
+// Public trade feed from ws-server (counterparty ids are stripped server-side).
 export type Fill = {
   marketId: string;
   price: string;
   qty: string;
-  takerUserId: string;
-  takerOrderId: string;
   takerSide: Side;
-  takerLeverage: string;
-  makerUserId: string;
-  makerOrderId: string;
-  makerLeverage: string;
 };

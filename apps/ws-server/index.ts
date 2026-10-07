@@ -47,7 +47,10 @@ while(true){
 
     for(const stream of response) {
         for(const message of stream.messages){
-            server.publish("fills", JSON.stringify(message.message));
+            // Public feed (guests included): send only what the UI needs, never
+            // user ids / order ids / leverage of the two counterparties.
+            const { marketId, price, qty, takerSide } = message.message;
+            server.publish("fills", JSON.stringify({ marketId, price, qty, takerSide }));
             await client.xAck("fills", "ws-group" , message.id);
         }
     }

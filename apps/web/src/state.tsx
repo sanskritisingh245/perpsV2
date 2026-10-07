@@ -9,30 +9,53 @@ import {
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import type { Fill, Market } from "./types";
-import { getToken, setToken, clearToken, getMarkets } from "./api";
+import { getToken, setToken, clearToken, getMarkets, SESSION_EXPIRED } from "./api";
 
 /* ------------------------------------------------------------------ auth */
 
+// Guests can browse everything; the login modal only opens when they try to
+// do something that needs an account (trade, wallet).
+export type AuthMode = "in" | "up";
 type AuthCtx = {
   token: string | null;
   signedIn: boolean;
   login: (token: string) => void;
   logout: () => void;
+  authMode: AuthMode | null; // null = login modal closed
+  openAuth: (mode?: AuthMode) => void;
+  closeAuth: () => void;
 };
 const AuthContext = createContext<AuthCtx | null>(null);
 
 function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setTok] = useState<string | null>(() => getToken());
+  const [authMode, setAuthMode] = useState<AuthMode | null>(null);
   const login = useCallback((t: string) => {
     setToken(t);
     setTok(t);
+    setAuthMode(null);
   }, []);
   const logout = useCallback(() => {
     clearToken();
     setTok(null);
   }, []);
+  const openAuth = useCallback((mode: AuthMode = "up") => setAuthMode(mode), []);
+  const closeAuth = useCallback(() => setAuthMode(null), []);
+
+  // api.ts drops the token on a 401; mirror that here so the UI goes back to guest mode.
+  useEffect(() => {
+    const onExpired = () => {
+      setTok(null);
+      toast.error("Session expired — please sign in again");
+    };
+    window.addEventListener(SESSION_EXPIRED, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED, onExpired);
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ token, signedIn: !!token, login, logout }}>
+    <AuthContext.Provider
+      value={{ token, signedIn: !!token, login, logout, authMode, openAuth, closeAuth }}
+    >
       {children}
     </AuthContext.Provider>
   );
@@ -64,8 +87,8 @@ export function useToast() {
 }
 
 /* ----------------------------------------------------------- markets store */
-// No backend list endpoint exists, so the set of known markets is kept locally
-// (seeded when you create one via admin, or add an existing id by hand).
+// The backend's /markets is the source of truth. localStorage is only a cache
+// for first paint / backend-offline; add/remove mirror successful admin calls.
 
 const MARKETS_KEY = "perp.markets";
 type MarketsCtx = {
@@ -87,17 +110,10 @@ function MarketsProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(MARKETS_KEY, JSON.stringify(markets));
   }, [markets]);
 
-  // Load the global market list from the backend so every account sees every
-  // market, not just the ones added locally. Merge into the cached list.
+  // Replace (not merge) so markets deleted on the backend disappear here too.
   useEffect(() => {
     getMarkets()
-      .then((res) => {
-        setMarkets((list) => {
-          const byId = new Map(list.map((m) => [m.id, m]));
-          for (const m of res.data) byId.set(m.id, m);
-          return [...byId.values()];
-        });
-      })
+      .then((res) => setMarkets(res.data))
       .catch(() => { /* backend unreachable — keep the cached list */ });
   }, []);
 

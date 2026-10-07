@@ -13,6 +13,7 @@ export function setToken(t: string) {
 export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
+export const SESSION_EXPIRED = "perp:session-expired";
 
 export class ApiError extends Error {
   status: number;
@@ -50,6 +51,14 @@ async function request<T>(
     /* empty body */
   }
 
+  // Only authMiddleware answers 401: our stored token is missing/expired/invalid.
+  // Drop it and let AuthProvider fall back to guest mode instead of every
+  // poll failing forever.
+  if (res.status === 401 && token) {
+    clearToken();
+    window.dispatchEvent(new Event(SESSION_EXPIRED));
+  }
+
   if (!res.ok || (data && data.success === false)) {
     const msg = (data && (data.error || data.msg)) || `HTTP ${res.status}`;
     throw new ApiError(String(msg), res.status);
@@ -59,7 +68,7 @@ async function request<T>(
 
 // ---- auth ----
 export function signup(username: string, password: string) {
-  return request<{ success: boolean; id: string }>("POST", "/signup", { username, password });
+  return request<{ success: boolean; id: string; data: string }>("POST", "/signup", { username, password });
 }
 export function signin(username: string, password: string) {
   return request<{ success: boolean; data: string; msg: string }>("POST", "/signin", {
@@ -156,3 +165,12 @@ export function createMarket(slug: string, imageUrl: string, adminSecret: string
     { authorization: adminSecret },
   );
 }
+export function deleteMarket(id: string, adminSecret: string) {
+  return request<{ success: boolean }>("DELETE", `/admin/market/${id}`, undefined, {
+    authorization: adminSecret,
+  });
+}
+
+// Admin tools (create/delete market) are only rendered at ?admin. This is just
+// to keep them out of regular users' way — the backend enforces ADMIN_SECRET.
+export const isAdminView = new URLSearchParams(location.search).has("admin");

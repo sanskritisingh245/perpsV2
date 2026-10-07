@@ -159,7 +159,7 @@ export function Trades({ trades, marketId }: { trades: Fill[]; marketId: string 
         </thead>
         <tbody>
           {rows.map((t, i) => (
-            <tr key={t.takerOrderId + i}>
+            <tr key={i}>
               <td className="muted">{clockTime()}</td>
               <td className={t.takerSide === "BUY" ? "up" : "down"}>{t.takerSide}</td>
               <td className={t.takerSide === "BUY" ? "up" : "down"}>{num(t.price)}</td>

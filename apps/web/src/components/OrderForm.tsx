@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Balance, Market, Side, OrderType } from "../types";
 import { placeOrder } from "../api";
-import { useToast } from "../state";
+import { useAuth, useToast } from "../state";
 import { num } from "../format";
 
 export function OrderForm({
@@ -16,6 +16,7 @@ export function OrderForm({
   onPlaced: () => void;
 }) {
   const { push } = useToast();
+  const { signedIn, openAuth } = useAuth();
   const [side, setSide] = useState<Side>("BUY");
   const [type, setType] = useState<OrderType>("LIMIT");
   const [price, setPrice] = useState("");
@@ -40,12 +41,20 @@ export function OrderForm({
   }, [effPrice, qty, leverage]);
 
   const notional = (effPrice || 0) * (Number(qty) || 0);
-  const insufficient = margin > available + 1e-9;
-  const canSubmit =
-    !!market && Number(qty) > 0 && effPrice > 0 && !insufficient && !busy;
+  // Guests have no balance yet; don't nag them about margin before they sign up.
+  const insufficient = signedIn && margin > available + 1e-9;
+  const canSubmit = signedIn
+    ? !!market && Number(qty) > 0 && effPrice > 0 && !insufficient && !busy
+    : !!market;
 
   async function submit() {
     if (!market) return;
+    // Guest: open signup instead. The form stays mounted behind the modal, so
+    // their values survive; they click again to confirm at the current price.
+    if (!signedIn) {
+      openAuth("up");
+      return;
+    }
     setBusy(true);
     try {
       await placeOrder({
@@ -137,7 +146,7 @@ export function OrderForm({
         <div className="kv"><span>Required margin</span><b>{num(margin)} USD</b></div>
         <div className="kv">
           <span>Available</span>
-          <b className={insufficient ? "down" : ""}>{num(available)} USD</b>
+          <b className={insufficient ? "down" : ""}>{signedIn ? `${num(available)} USD` : "—"}</b>
         </div>
       </div>
 
@@ -148,6 +157,10 @@ export function OrderForm({
       >
         {!market
           ? "Select a market"
+          : !signedIn
+          ? "Sign up to trade"
+          : type === "MARKET" && !lastPrice
+          ? "No trades yet — use Limit"
           : insufficient
           ? "Insufficient margin"
           : busy

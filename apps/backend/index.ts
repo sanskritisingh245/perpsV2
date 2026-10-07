@@ -15,6 +15,7 @@ const ADMIN_SECRET=process.env.ADMIN_SECRET;
 if(!JWT_SECRET || !ADMIN_SECRET){
     throw new Error("JWT_SECRET and ADMIN_SECRET must be set");
 }
+const TOKEN_TTL = "7d"; // expired tokens 401 -> the web app drops back to guest mode
 
 
 const client=createClient({ url: process.env.REDIS_URL });//publish message (falls back to localhost when REDIS_URL is unset)
@@ -78,9 +79,16 @@ app.post("/api/signup", async (req: Request, res: Response) =>{
         }
     })
 
+    // Return a token too, so the client is logged in straight after signup
+    // instead of needing a separate /signin round trip.
+    const token= jwt.sign({
+        id:response.id,
+        username:response.username
+    },JWT_SECRET,{ expiresIn: TOKEN_TTL })
     res.json({
         success:true,
-        id:response.id
+        id:response.id,
+        data:token
     })
 })
 
@@ -119,7 +127,7 @@ app.post("/api/signin", async (req:Request, res:Response)=>{
     const token= jwt.sign({
         id:user.id,
         username:user.username
-    },JWT_SECRET)
+    },JWT_SECRET,{ expiresIn: TOKEN_TTL })
     //console.log("token", token )
     return res.status(200).json({
         success:true,
@@ -136,8 +144,31 @@ app.post("/api/admin/market", async (req:Request, res:Response) => {
     const market = await prisma.market.create({ data: { slug: req.body.slug, imageUrl: req.body.imageUrl } });
     marketIds.add(market.id); // keep the order-validation cache fresh for brand-new markets
     return res.json({ success: true, data: market });
-    
- 
+
+
+});
+
+// Admin-only. Nothing has a foreign key to Market, so deleting one that still
+// has open orders/positions would orphan them (and their locked margin) —
+// refuse until the market is flat.
+app.delete("/api/admin/market/:id", async (req:Request, res:Response) => {
+    if (req.headers.authorization !== ADMIN_SECRET){
+        return res.status(403).json({ success: false, error: "FORBIDDEN" });
+    }
+    const id = req.params.id as string;
+    const [openOrders, positions] = await Promise.all([
+        prisma.order.count({ where: { marketId: id, status: { in: ["OPEN", "PARTIALLY_FILLED"] } } }),
+        prisma.position.count({ where: { marketId: id } }),
+    ]);
+    if (openOrders || positions) {
+        return res.status(409).json({ success: false, error: "MARKET_IN_USE" });
+    }
+    const { count } = await prisma.market.deleteMany({ where: { id } });
+    if (!count) {
+        return res.status(404).json({ success: false, error: "MARKET_NOT_FOUND" });
+    }
+    marketIds.delete(id); // stop accepting new orders for it immediately
+    return res.json({ success: true });
 });
 
 
@@ -209,6 +240,67 @@ app.get("/api/balance", authMiddleware, async(req:Request, res:Response)=>{
     })
 })
 
+// Publishes the "order.created" event to the `orders` Redis stream, which is
+// the only way the matching engine learns about a new order. Retries a few
+// times with backoff to ride out brief Redis blips before giving up.
+async function publishOrderCreated(
+    order: { id: string; marketId: string; orderType: string; side: string; price: string | null; qty: string; leverage: number },
+    userId: string,
+    attempts = 3,
+): Promise<boolean> {
+    const fields = {
+        type: "order.created",
+        orderId: order.id,
+        userId,
+        marketId: order.marketId,
+        side: order.side,
+        price: order.price ?? "0",
+        qty: order.qty,
+        leverage: String(order.leverage),
+        orderType: order.orderType,
+    };
+    for (let i = 0; i < attempts; i++) {
+        try {
+            await client.XADD("orders", "*", fields);
+            return true;
+        } catch (err: any) {
+            console.error(`[order] XADD attempt ${i + 1}/${attempts} failed`, order.id, err?.message ?? err);
+            if (i < attempts - 1) await new Promise((r) => setTimeout(r, 200 * 2 ** i));
+        }
+    }
+    return false;
+}
+
+// Safety net for the rare case where publishOrderCreated exhausted its
+// retries above (e.g. Redis was down longer than ~1s): periodically look for
+// orders whose "order.created" event never reached the stream and republish
+// them. Without this, such an order sits OPEN forever — the matching engine
+// only discovers orders via that stream. The matching engine's own
+// in-process de-dupe (`processed` set in apps/matching-engine/index.ts) makes
+// a redundant republish harmless if it actually did get through the first time.
+async function reconcileUnpublishedOrders() {
+    try {
+        const stale = await prisma.order.findMany({
+            where: {
+                eventPublished: false,
+                status: "OPEN",
+                createdAt: { lt: new Date(Date.now() - 5_000) },
+            },
+            take: 50,
+        });
+        for (const order of stale) {
+            const published = await publishOrderCreated(order, order.userId);
+            if (published) {
+                await prisma.order.update({ where: { id: order.id }, data: { eventPublished: true } });
+                console.log("[order] reconciliation republished", order.id);
+            }
+        }
+    } catch (err: any) {
+        console.error("[order] reconciliation sweep failed", err?.message ?? err);
+    }
+}
+setInterval(reconcileUnpublishedOrders, 15_000);
+
 app.post("/api/order", authMiddleware , async(req:Request, res:Response)=>{
     const userId=req.id;
 
@@ -273,6 +365,7 @@ app.post("/api/order", authMiddleware , async(req:Request, res:Response)=>{
                     side:data.side,
                     price:data.price,
                     qty:data.qty,
+                    leverage: data.leverage,
                     initialMargin: requiredMargin.toString(),
                     filledQty: "0",
                     status: "OPEN"
@@ -286,17 +379,21 @@ app.post("/api/order", authMiddleware , async(req:Request, res:Response)=>{
         return res.status(500).json({ success: false, error: "ORDER_FAILED" });
     }
 
-    await client.XADD("orders", "*", {
-        type: "order.created",
-        orderId: order.id,
-        userId: userId,
-        marketId: order.marketId,
-        side: data.side,
-        price: data.price,
-        qty: data.qty,
-        leverage: String(data.leverage),
-        orderType: data.OrderType,
-    });
+    // The order is already committed at this point; a failure publishing the
+    // event shouldn't turn into a "server error" for an order that actually
+    // succeeded. publishOrderCreated retries a few times on its own; if it
+    // still fails, eventPublished stays false and the reconciliation sweep
+    // below picks it up later instead of the order sitting OPEN forever.
+    const published = await publishOrderCreated(order, userId);
+    if (published) {
+        try {
+            await prisma.order.update({ where: { id: order.id }, data: { eventPublished: true } });
+        } catch (err: any) {
+            console.error("[order] failed to mark eventPublished", order.id, err?.message ?? err);
+        }
+    } else {
+        console.error("[order] giving up on publish after retries; reconciliation sweep will retry", order.id);
+    }
 
     return res.status(200).json({
         success: true,
@@ -332,14 +429,22 @@ app.get("/api/orders", authMiddleware , async(req:Request , res:Response)=>{
             error:"USERID_NOT_FOUND"
         })
     }
-    const orders = await prisma.order.findMany({
-        where:{
-            userId:userId
-        },
-        orderBy:{
-            createdAt :"desc"
-        }
-    })
+    // All open orders (the user must be able to see/cancel every one) plus the
+    // latest 50 for history — returning every order ever placed got huge, and
+    // the UI polls this every 4s.
+    const [open, recent] = await Promise.all([
+        prisma.order.findMany({
+            where:{ userId, status:{ in:["OPEN", "PARTIALLY_FILLED"] } },
+            orderBy:{ createdAt:"desc" },
+        }),
+        prisma.order.findMany({
+            where:{ userId },
+            orderBy:{ createdAt:"desc" },
+            take:50,
+        }),
+    ]);
+    const byId = new Map([...open, ...recent].map((o) => [o.id, o]));
+    const orders = [...byId.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     return res.status(200).json({
         success:true,
         data:orders
@@ -383,12 +488,22 @@ app.delete("/api/order/:id", authMiddleware , async(req:Request, res:Response)=>
 // orderbook:snapshot:<marketId>; we read it, aggregate per price level and
 // return sorted bids (desc) and asks (asc).
 
+// Redis can lose the last trade price (snapshot predates a fill, or Redis was
+// wiped); fall back to the newest settled fill in Postgres so clients can
+// still price market orders / uPnL straight after load.
+// ponytail: unindexed scan on Fill.market_id, add an index if fills grow large
+async function lastFillPrice(marketId: string): Promise<number> {
+    const f = await prisma.fill.findFirst({ where: { market_id: marketId }, orderBy: { createdAt: "desc" } });
+    return f ? Number(f.price) : 0;
+}
+
 app.get("/api/orderbook/:marketId", async (req: Request, res: Response) => {
-    const raw = await client.get(`orderbook:snapshot:${req.params.marketId}`);
+    const marketId = req.params.marketId as string;
+    const raw = await client.get(`orderbook:snapshot:${marketId}`);
     if (!raw) {
         return res.status(200).json({
             success: true,
-            data: { marketId: req.params.marketId, bids: [], asks: [], lastTradePrice: 0 },
+            data: { marketId, bids: [], asks: [], lastTradePrice: await lastFillPrice(marketId) },
         });
     }
 
@@ -409,7 +524,7 @@ app.get("/api/orderbook/:marketId", async (req: Request, res: Response) => {
 
     return res.status(200).json({
         success: true,
-        data: { marketId: book.marketId, bids, asks, lastTradePrice: book.lastTradePrice },
+        data: { marketId: book.marketId, bids, asks, lastTradePrice: book.lastTradePrice || await lastFillPrice(marketId) },
     });
 });
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { signin, signup } from "../api";
 import { useAuth, useToast } from "../state";
 import { Button } from "@/components/ui/button";
@@ -7,10 +7,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+// Modal over the trading screen, so a guest who fills in an order and then
+// signs up lands back on the same form with their values intact.
 export function Login() {
-  const { login } = useAuth();
+  const { login, authMode, closeAuth } = useAuth();
   const { push } = useToast();
-  const [mode, setMode] = useState<"in" | "up">("in");
+  const [mode, setMode] = useState<"in" | "up">(authMode ?? "up");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
@@ -25,13 +27,11 @@ export function Login() {
     }
     setBusy(true);
     try {
-      if (mode === "up") {
-        await signup(username, password);
-        push("ok", "Account created");
-      }
-      const res = await signin(username, password);
+      // Signup returns a token itself, so a new user is logged in and can trade
+      // immediately; signin is only for returning users.
+      const res = mode === "up" ? await signup(username, password) : await signin(username, password);
       login(res.data);
-      push("ok", "Signed in");
+      push("ok", mode === "up" ? "Account created — deposit in the Wallet to start trading" : "Signed in");
     } catch (e: any) {
       setErr(prettyError(e.message));
     } finally {
@@ -39,13 +39,33 @@ export function Login() {
     }
   }
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeAuth(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [closeAuth]);
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-sm">
+    <div className="overlay p-4" onMouseDown={closeAuth}>
+      <Card
+        className="w-full max-w-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-label={mode === "in" ? "Sign in" : "Create account"}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <CardHeader>
           <div className="flex items-center gap-2 text-lg font-semibold tracking-tight">
             <span className="grid size-7 place-items-center rounded-md bg-primary/15 text-primary bevel">◆</span>
             Perp
+            <button
+              type="button"
+              className="ml-auto text-muted-foreground hover:text-foreground"
+              aria-label="Close"
+              onClick={closeAuth}
+            >
+              ✕
+            </button>
           </div>
           <CardTitle className="mt-4">{mode === "in" ? "Sign in" : "Create account"}</CardTitle>
           <CardDescription>

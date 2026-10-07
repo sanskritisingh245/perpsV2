@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type React from "react";
-import { useFills, useMarkets } from "../state";
-import { getOrders, getPositions, getBalance, binanceSymbol } from "../api";
+import { useAuth, useFills, useMarkets } from "../state";
+import { getOrders, getPositions, getBalance, getOrderbook, binanceSymbol, isAdminView } from "../api";
 import type { Order, Position, Balance } from "../types";
 import { num, compact } from "../format";
 import { PriceChart } from "./PriceChart";
@@ -20,7 +20,13 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 
 export function Trade() {
   const { markets } = useMarkets();
-  const { lastPrice, trades } = useFills();
+  const { lastPrice: livePrice, trades } = useFills();
+  // Live fills only cover trades since page load. Seed each market's last trade
+  // price from its book snapshot so market orders, limit prefill and uPnL work
+  // right after a reload; live prices take over as they arrive.
+  const [seedPrice, setSeedPrice] = useState<Record<string, number>>({});
+  const lastPrice = { ...seedPrice, ...livePrice };
+  const { signedIn, openAuth } = useAuth();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tf, setTf] = useState("15m");
@@ -48,7 +54,14 @@ export function Trade() {
     if (!selectedId || !markets.some((m) => m.id === selectedId)) setSelectedId(markets[0]!.id);
   }, [markets, selectedId]);
 
+  // Account data needs a token; guests skip the polling (it would only 401).
   const refresh = useCallback(async () => {
+    if (!signedIn) {
+      setOrders([]);
+      setPositions([]);
+      setBalance(null);
+      return;
+    }
     try {
       const [o, p] = await Promise.all([getOrders(), getPositions()]);
       setOrders(o.data);
@@ -58,13 +71,23 @@ export function Trade() {
       const b = await getBalance();
       setBalance(b.data);
     } catch { setBalance(null); }
-  }, []);
+  }, [signedIn]);
 
   useEffect(() => {
     refresh();
     const t = setInterval(refresh, 4000);
     return () => clearInterval(t);
   }, [refresh]);
+
+  useEffect(() => {
+    for (const m of markets) {
+      getOrderbook(m.id)
+        .then((r) => {
+          if (r.data.lastTradePrice > 0) setSeedPrice((s) => ({ ...s, [m.id]: r.data.lastTradePrice }));
+        })
+        .catch(() => { /* no seed — live fills will fill it in */ });
+    }
+  }, [markets]);
 
   const market = markets.find((m) => m.id === selectedId) ?? null;
   const last = selectedId ? lastPrice[selectedId] : undefined;
@@ -141,9 +164,11 @@ export function Trade() {
                     </div>
                   ))}
                   {!markets.length && <div className="empty" style={{ padding: 20 }}>No markets yet.</div>}
-                  <div style={{ padding: 10 }}>
-                    <button className="btn sm" style={{ width: "100%" }} onClick={() => setShowAdd(true)}>+ Add market</button>
-                  </div>
+                  {isAdminView && (
+                    <div style={{ padding: 10 }}>
+                      <button className="btn sm" style={{ width: "100%" }} onClick={() => setShowAdd(true)}>+ Add market</button>
+                    </div>
+                  )}
                 </div>
               </aside>
             </div>
@@ -195,10 +220,15 @@ export function Trade() {
                   <button className={tab === "trades" ? "on" : ""} onClick={() => setTab("trades")}>Market Trades</button>
                   <button className={tab === "history" ? "on" : ""} onClick={() => setTab("history")}>Order History</button>
                 </div>
-                {tab === "positions" && <Positions positions={positions} markets={markets} lastPrice={lastPrice} />}
-                {tab === "open" && <OpenOrders orders={orders} markets={markets} onChange={refresh} />}
                 {tab === "trades" && <Trades trades={trades} marketId={selectedId} />}
-                {tab === "history" && <OrderHistory orders={orders} markets={markets} />}
+                {tab !== "trades" && !signedIn && (
+                  <div className="empty">
+                    <button className="linkbtn" onClick={() => openAuth("in")}>Sign in</button> to see your positions and orders
+                  </div>
+                )}
+                {signedIn && tab === "positions" && <Positions positions={positions} markets={markets} lastPrice={lastPrice} />}
+                {signedIn && tab === "open" && <OpenOrders orders={orders} markets={markets} onChange={refresh} />}
+                {signedIn && tab === "history" && <OrderHistory orders={orders} markets={markets} />}
               </div>
             </div>
           </div>

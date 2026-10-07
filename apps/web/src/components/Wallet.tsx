@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getBalance, onRamp } from "../api";
+import { getBalance, onRamp, deleteMarket, isAdminView } from "../api";
 import type { Balance } from "../types";
 import { useMarkets, useToast } from "../state";
 import { num, shortId } from "../format";
@@ -12,6 +12,7 @@ export function Wallet() {
   const [amount, setAmount] = useState("");
   const [busy, setBusy] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [adminSecret, setAdminSecret] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -38,6 +39,17 @@ export function Wallet() {
       push("err", friendlyError(e.message));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function removeMarket(id: string, slug: string) {
+    if (!confirm(`Delete market ${slug} for everyone?`)) return;
+    try {
+      await deleteMarket(id, adminSecret);
+      remove(id);
+      push("ok", `Market ${slug} deleted`);
+    } catch (e: any) {
+      push("err", friendlyError(e.message));
     }
   }
 
@@ -77,32 +89,41 @@ export function Wallet() {
         </p>
       </div>
 
-      <div className="panelcard">
-        <div className="row" style={{ marginBottom: 14 }}>
-          <h2 style={{ margin: 0 }}>Markets</h2>
-          <div className="spacer" />
-          <button className="btn sm" onClick={() => setShowAdd(true)}>+ Add market</button>
+      {isAdminView && (
+        <div className="panelcard">
+          <div className="row" style={{ marginBottom: 14 }}>
+            <h2 style={{ margin: 0 }}>Markets (admin)</h2>
+            <div className="spacer" />
+            <button className="btn sm" onClick={() => setShowAdd(true)}>+ Create market</button>
+          </div>
+          <div className="field" style={{ marginBottom: 14 }}>
+            <label>Admin secret (needed to delete)</label>
+            <div className="input">
+              <input type="password" placeholder="ADMIN_SECRET" value={adminSecret} onChange={(e) => setAdminSecret(e.target.value)} />
+            </div>
+          </div>
+          {markets.length ? (
+            <table>
+              <thead><tr><th>Slug</th><th>Market id</th><th></th></tr></thead>
+              <tbody>
+                {markets.map((m) => (
+                  <tr key={m.id}>
+                    <td>{m.slug}</td>
+                    <td className="muted">{shortId(m.id, 16)}…</td>
+                    <td>
+                      <button className="linkbtn danger" disabled={!adminSecret} onClick={() => removeMarket(m.id, m.slug)}>
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="note">No markets yet.</p>
+          )}
         </div>
-        {markets.length ? (
-          <table>
-            <thead><tr><th>Slug</th><th>Market id</th><th></th></tr></thead>
-            <tbody>
-              {markets.map((m) => (
-                <tr key={m.id}>
-                  <td>{m.slug}</td>
-                  <td className="muted">{shortId(m.id, 16)}…</td>
-                  <td><button className="linkbtn danger" onClick={() => remove(m.id)}>Remove</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <p className="note">
-            No markets tracked. Create one with the admin secret, or add an existing market id.
-            The backend exposes no market-list endpoint, so this set lives in your browser.
-          </p>
-        )}
-      </div>
+      )}
 
       {showAdd && <AddMarket onClose={() => setShowAdd(false)} />}
     </div>
@@ -120,6 +141,9 @@ function friendlyError(code: string): string {
     case "P2002": return "That already exists";
     case "P2025": return "Account not found — log out and sign in again";
     case "INVALID_DATA": return "Enter a valid amount";
+    case "FORBIDDEN": return "Wrong admin secret";
+    case "MARKET_IN_USE": return "Market has open orders or positions — close them first";
+    case "MARKET_NOT_FOUND": return "Market already deleted";
     case "NOT_ENOUGH_BALANCE": return "Not enough balance";
     case "INCORRECT_TOKEN":
     case "UNAUTHORIZED":

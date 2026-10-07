@@ -51,6 +51,17 @@ while(true){
                     userId: order.userId,
                     unfilledQty:String(removed.qty - removed.filledQty),
                 });
+                // Publish the book like the order path does. Without this the
+                // snapshot keeps the cancelled order: /orderbook still shows it,
+                // and a restart restores it into the book where it can fill.
+                await client.xAdd("book-updates", "*", {
+                    marketId: order.marketId,
+                    book: JSON.stringify(getOrCreateBook(order.marketId)),
+                });
+            }else{
+                // Usually benign (it filled just before the cancel arrived), but
+                // log it — a silent no-op here is how stuck OPEN orders hid.
+                console.warn("[engine] cancel: order not in book", order.orderId);
             }
             await client.xAck("orders", "engine-group", message.id);
             continue;
